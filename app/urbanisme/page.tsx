@@ -430,16 +430,17 @@ export default function UrbanismePage() {
     const enable = !layers[key]; const map = mapRef.current;
     setLayers((current) => {
       const next={...current,[key]:!current[key]};
-      if (enable && ["mos","plu","servitudes","publicLand"].includes(key)) {
-        (["mos","plu","servitudes","publicLand"] as const).forEach((theme) => { if (theme !== key) next[theme] = false; });
-      }
       layersStateRef.current=next;
       return next;
     });
     if (enable && map) {
       map.setMinZoom(10);
-      setLayerFeedback("Passage automatique au niveau 13 : chargement de la couche détaillée…");
-      window.requestAnimationFrame(() => map.flyTo(map.getCenter(), 13, { duration:.65 }));
+      if (map.getZoom() < 13) {
+        setLayerFeedback("Passage automatique au niveau 13 : chargement de la couche détaillée…");
+        window.requestAnimationFrame(() => map.flyTo(map.getCenter(), 13, { duration:.65 }));
+      } else {
+        setLayerFeedback(`Couche ajoutée au niveau ${map.getZoom()} : votre cadrage est conservé.`);
+      }
     }
   }
 
