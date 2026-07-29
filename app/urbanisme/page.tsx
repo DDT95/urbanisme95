@@ -397,6 +397,21 @@ export default function UrbanismePage() {
     setLayerFeedback("Vue départementale : choisissez une adresse ou une commune.");
   }
 
+  function closeParcelDetails() {
+    const map = mapRef.current;
+    if (map) {
+      layersRef.current.forEach((layer) => map.removeLayer(layer));
+      layersRef.current = [];
+      if (markerRef.current) map.removeLayer(markerRef.current);
+    }
+    markerRef.current = null;
+    selectionPointRef.current = null;
+    setResult(null);
+    setDetailsOpen(false);
+    setMessage("Sélection fermée. Cliquez sur une autre parcelle ou lancez une nouvelle recherche.");
+    setLayerFeedback("Aucune parcelle sélectionnée. Les couches actives restent affichées.");
+  }
+
   function exploreCommune(code = communeCode) {
     const feature = communes.find((item) => String(item.properties?.code) === code);
     const map = mapRef.current; const L = (window as any).L;
@@ -553,7 +568,7 @@ export default function UrbanismePage() {
         </section>
       </div>
       <footer className="urban-footer"><span><strong>Cadastre + GPU + BDNB + MOS + DGFiP</strong> · lecture parcellaire du Val-d’Oise</span><span>DDT Val-d’Oise · Leaflet 1.9.4 · <a href="https://ddt95.github.io/atlas-territorial-95/">Retour à l’Atlas</a></span></footer>
-      {result && detailsOpen && <aside className="observatory-drawer" aria-label="Détail de la parcelle"><div className="observatory-drawer-head"><div className="print-brand"><img src={`${basePath}/prefet-val-doise-logo.png`} alt="Préfet du Val-d’Oise"/><span><b>Fiche d’identité parcellaire</b><small>DDT du Val-d’Oise · {new Date().toLocaleDateString("fr-FR")}</small></span></div><div className="drawer-actions"><button className="print-parcel" onClick={openParcelPdf}>Consulter la fiche PDF</button><button onClick={() => setDetailsOpen(false)} aria-label="Fermer">×</button></div><small>{result.addressLabel} · {result.commune}</small><h2 className="drawer-address">{streetOnly(result.address)}</h2><div className="parcel-id-print">Parcelle {firstValue(parcelProps,["section"],"")} {firstValue(parcelProps,["numero"],"—")}</div></div><div className="observatory-drawer-body urban-results">
+      {result && detailsOpen && <aside className="observatory-drawer" aria-label="Détail de la parcelle"><div className="observatory-drawer-head"><div className="print-brand"><img src={`${basePath}/prefet-val-doise-logo.png`} alt="Préfet du Val-d’Oise"/><span><b>Fiche d’identité parcellaire</b><small>DDT du Val-d’Oise · {new Date().toLocaleDateString("fr-FR")}</small></span></div><div className="drawer-actions"><button className="print-parcel" onClick={openParcelPdf}>Consulter la fiche PDF</button><button onClick={closeParcelDetails} aria-label="Fermer et désélectionner la parcelle">×</button></div><small>{result.addressLabel} · {result.commune}</small><h2 className="drawer-address">{streetOnly(result.address)}</h2><div className="parcel-id-print">Parcelle {firstValue(parcelProps,["section"],"")} {firstValue(parcelProps,["numero"],"—")}</div></div><div className="observatory-drawer-body urban-results">
         <section><div className="result-heading"><span>01</span><h2>Parcelle cadastrale</h2></div><dl><div><dt>Référence</dt><dd>{firstValue(parcelProps,["section"],"")} {firstValue(parcelProps,["numero"],"—")}</dd></div><div><dt>Contenance</dt><dd>{firstValue(parcelProps,["contenance"],"—")} m²</dd></div></dl>{result.addressLabel === "Adresse la plus proche" && <p className="address-caution">Adresse BAN la plus proche du point cliqué.</p>}</section>
         <section className="building-summary"><div className="result-heading"><span>02</span><h2>Bâti présent</h2></div>{buildingCount ? <><div className="parcel-kpis"><div><strong>{buildingCount}</strong><span>groupe{buildingCount > 1 ? "s" : ""} de bâtiments</span></div><div><strong>{formatNumber(builtFootprint," m²")}</strong><span>emprise bâtie estimée</span></div><div><strong>{formatNumber(coverageRatio," %")}</strong><span>taux d’emprise</span></div></div><dl><div><dt>Usage principal</dt><dd>{uniqueValues(result.buildings.map((building) => building.usage_principal_bdnb_open)).join(", ") || "Non renseigné"}</dd></div><div><dt>Construction la plus ancienne</dt><dd>{oldestBuilding || "Non renseignée"}</dd></div><div><dt>Hauteur maximale estimée</dt><dd>{maxHeight ? formatNumber(maxHeight," m") : "Non renseignée"}</dd></div><div><dt>Logements recensés</dt><dd>{dwellingCount || "Non renseigné"}</dd></div><div><dt>DPE disponible</dt><dd>{dpeClasses.length ? dpeClasses.join(", ") : "Non disponible"}</dd></div></dl><p className="source-caption">Source : BDNB Open, CSTB. Les groupes de bâtiments peuvent agréger plusieurs constructions.</p></> : <p className="empty-result">Aucun bâtiment rattaché à cette parcelle dans la BDNB Open.</p>}</section>
         <section><div className="result-heading"><span>03</span><h2>Propriété et foncier public</h2></div><div className={`ownership-status ${result.publicLand || publicOwners.length ? "known" : "unknown"}`}><small>{result.publicLand ? "Propriétaire public présumé" : "Catégorie détectée"}</small><strong>{ownerCategory}</strong></div>{!result.publicLand && publicOwners.length ? <div className="owner-list">{publicOwners.map((owner) => <span key={owner}>{owner}</span>)}</div> : !result.publicLand && <p className="empty-result">Le nom des propriétaires privés n’est pas diffusé en open data. L’absence de nom ne signifie pas que la parcelle est sans propriétaire.</p>}<p className="source-caption">Source ouverte : DGFiP, Fichiers des parcelles des personnes morales 2025. Le Référentiel foncier public Cerema avec accès métier reste la référence exhaustive.</p></section>
