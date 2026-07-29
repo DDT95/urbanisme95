@@ -514,7 +514,7 @@ export default function UrbanismePage() {
       <header className="urban-observatory-header">
         <img src={`${basePath}/prefet-val-doise-logo.png`} alt="Préfet du Val-d’Oise — Liberté Égalité Fraternité"/>
         <div><span>Cadastre · urbanisme · foncier · Val-d’Oise</span><h1>Urbanisme à la parcelle</h1><p><strong>Val-d’Oise</strong> · bâti · MOS · PLU · servitudes · risques</p></div>
-        <div className="header-service-state"><i className={Object.values(services).every((state)=>state==="online")?"online":"checking"}/><span><strong>{Object.values(services).filter((state)=>state==="online").length}/7 sources connectées</strong><small>Données publiques actualisées</small></span></div>
+        <div className="urban-header-actions"><a href="https://ddt95.github.io/atlas-territorial-95/">← Retour à l’Atlas</a><div className="header-service-state"><i className={Object.values(services).every((state)=>state==="online")?"online":"checking"}/><span><strong>{Object.values(services).filter((state)=>state==="online").length}/7 sources connectées</strong><small>Données publiques actualisées</small></span></div></div>
       </header>
       <div className="urban-layout">
         <aside className="urban-panel">
