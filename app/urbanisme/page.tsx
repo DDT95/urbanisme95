@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type FeatureCollection = { type: "FeatureCollection"; features: any[] };
 type AddressResult = { label: string; city?: string; citycode?: string; postcode?: string; coordinates: [number, number] };
@@ -119,6 +119,9 @@ export default function UrbanismePage() {
   const [communeSuggestionsOpen, setCommuneSuggestionsOpen] = useState(false);
   const [activeCommune, setActiveCommune] = useState("");
   const [layers, setLayers] = useState({ parcels: false, buildings: false, mos: false, plu: false, servitudes: false, publicLand: false });
+  const [publicLandFilter, setPublicLandFilter] = useState<"state"|"all">("state");
+  const publicLandFilterRef = useRef<"state"|"all">("state");
+  const [publicDataReady, setPublicDataReady] = useState(false);
   const [layerLoading, setLayerLoading] = useState({ buildings:false, mos:false, plu:false, servitudes:false, publicLand:false });
   const [services, setServices] = useState<Record<string,"checking"|"online"|"error">>({ Adresse:"checking", Cadastre:"checking", Urbanisme:"checking", Risques:"checking", Bâti:"checking", MOS:"checking", Foncier:"checking" });
   const [message, setMessage] = useState("Recherchez une adresse ou cliquez sur la carte.");
@@ -230,6 +233,7 @@ export default function UrbanismePage() {
         setLayerLoading((current)=>({...current,publicLand:true}));
         try {
           if (!publicLandDataRef.current) publicLandDataRef.current = await fetch(`${basePath}/data/foncier-public-95.json`).then((response) => response.json());
+          setPublicDataReady(true);
           const bounds = departmentBoundsRef.current;if(!bounds){setLayerFeedback("Préparation de l’emprise complète du Val-d’Oise…");return;}
           publicDepartmentLoadingRef.current=true;
           publicRequestRef.current?.abort();const publicController=new AbortController();publicRequestRef.current=publicController;
@@ -238,7 +242,7 @@ export default function UrbanismePage() {
           const worker=async()=>{while(cursor<cells.length){const [west,east,south,north]=cells[cursor++],geom=encodeURIComponent(JSON.stringify({type:"Polygon",coordinates:[[[west,south],[east,south],[east,north],[west,north],[west,south]]] }));const response=await fetch(`https://apicarto.ign.fr/api/cadastre/parcelle?geom=${geom}`,{signal:publicController.signal});if(response.ok){const data:FeatureCollection=await response.json();(data.features||[]).forEach((feature:any)=>{const id=String(feature.properties?.idu||feature.id||"");if(publicLandDataRef.current?.[id])requestFeatures.set(id,feature);});}completed++;setLayerFeedback(`Chargement complet du foncier public : ${completed} / ${cells.length} secteurs…`);}};
           await Promise.all(Array.from({length:Math.min(6,cells.length)},()=>worker()));
           if(publicController.signal.aborted)return;const publicFeatures=[...requestFeatures.values()];
-          publicLandLayerRef.current=L.geoJSON({type:"FeatureCollection",features:publicFeatures},{renderer:L.canvas({padding:.5}),style:(feature:any) => { const info=publicLandDataRef.current?.[String(feature.properties?.idu || feature.id || "")]; return { color:publicLandColor(info?.[0] || ""), weight:2, fillColor:publicLandColor(info?.[0] || ""), fillOpacity:.48 }; }, onEachFeature:(feature:any,layer:any) => { const info=publicLandDataRef.current?.[String(feature.properties?.idu || feature.id || "")]; if(info) layer.bindTooltip(`<div class="simple-map-tooltip"><b>${escapeHtml(info[1])}</b><span>${escapeHtml(info[2] || "Propriétaire public")}</span></div>`,{sticky:true,className:"urban-map-tooltip"}); }});
+          publicLandLayerRef.current=L.geoJSON({type:"FeatureCollection",features:publicFeatures},{renderer:L.canvas({padding:.5}),style:(feature:any) => { const info=publicLandDataRef.current?.[String(feature.properties?.idu || feature.id || "")],visible=publicLandFilterRef.current==="all"||info?.[0]==="1"; return { color:publicLandColor(info?.[0] || ""), weight:visible?2:0, opacity:visible?1:0, fillColor:publicLandColor(info?.[0] || ""), fillOpacity:visible?.52:0 }; }, onEachFeature:(feature:any,layer:any) => { const info=publicLandDataRef.current?.[String(feature.properties?.idu || feature.id || "")]; if(info) layer.bindTooltip(`<div class="simple-map-tooltip"><b>${escapeHtml(info[1])}</b><span>${escapeHtml(info[2] || "Propriétaire public")}</span></div>`,{sticky:true,className:"urban-map-tooltip"}); }});
           publicDepartmentLoadedRef.current=true;publicLandLayerRef.current.addTo(map);setLayerFeedback(`Foncier public complet : ${publicFeatures.length.toLocaleString("fr-FR")} parcelles chargées dans tout le Val-d’Oise.`);
           parcelTilesRef.current?.bringToFront(); buildingTilesRef.current?.bringToFront();
         } catch (error:any) { if(error?.name!=="AbortError"){console.warn("Foncier public indisponible", error);setLayerFeedback("Le référentiel du foncier public ne répond pas momentanément.");} }
@@ -290,6 +294,21 @@ export default function UrbanismePage() {
       drawResults(lon, lat, result.parcel ? { type: "FeatureCollection", features: [result.parcel] } : emptyCollection, { type: "FeatureCollection", features: result.zones }, { type: "FeatureCollection", features: result.servitudes });
     }
   }, [layers]);
+
+  useEffect(() => {
+    publicLandFilterRef.current = publicLandFilter;
+    const group = publicLandLayerRef.current;
+    if (!group?.eachLayer) return;
+    let visibleCount = 0;
+    group.eachLayer((layer:any) => {
+      const feature = layer.feature, id=String(feature?.properties?.idu||feature?.id||""), info=publicLandDataRef.current?.[id];
+      const visible = publicLandFilter === "all" || info?.[0] === "1";
+      layer.options.interactive = visible;
+      layer.setStyle({color:publicLandColor(info?.[0]||""),weight:visible?2:0,opacity:visible?1:0,fillColor:publicLandColor(info?.[0]||""),fillOpacity:visible?.52:0});
+      if (visible) visibleCount++;
+    });
+    setLayerFeedback(publicLandFilter==="state"?`Foncier de l’État : ${visibleCount.toLocaleString("fr-FR")} parcelles affichées.`:`Foncier public : ${visibleCount.toLocaleString("fr-FR")} parcelles affichées.`);
+  }, [publicLandFilter]);
 
   async function inspectMapPoint(lon: number, lat: number) {
     setLoading(true);
@@ -343,6 +362,7 @@ export default function UrbanismePage() {
       ]);
       const buildings = buildingsResponse?.ok ? await buildingsResponse.json() : [];
       if (!publicLandDataRef.current) publicLandDataRef.current = await fetch(`${basePath}/data/foncier-public-95.json`).then((response) => response.json()).catch(() => ({}));
+      setPublicDataReady(true);
       const publicLand = publicLandDataRef.current?.[parcelId];
       const mosData = mosResponse.ok ? await mosResponse.json() : emptyCollection;
       const mosProps = mosData.features?.[0]?.properties || {};
@@ -524,6 +544,12 @@ export default function UrbanismePage() {
   const maxHeight = Math.max(0, ...(result?.buildings.map((building) => numberValue(building.hauteur_mean)) || []));
   const dwellingCount = result?.buildings.reduce((sum, building) => sum + numberValue(building.nb_log), 0) || 0;
   const dpeClasses = uniqueValues(result?.buildings.map((building) => building.classe_bilan_dpe || (building.classe_conso_energie_arrete_2012 !== "N" ? building.classe_conso_energie_arrete_2012 : null)) || []);
+  const stateLandByCommune = useMemo(() => {
+    if (!publicDataReady || !publicLandDataRef.current) return [] as {code:string;name:string;count:number}[];
+    const counts:Record<string,number>={};
+    Object.entries(publicLandDataRef.current).forEach(([id,info])=>{if(info[0]==="1"){const code=id.slice(0,5);counts[code]=(counts[code]||0)+1;}});
+    return communes.map((feature:any)=>({code:String(feature.properties?.code||""),name:String(feature.properties?.nom||"Commune"),count:counts[String(feature.properties?.code||"")]||0})).filter((item)=>item.count>0).sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name,"fr"));
+  }, [communes,publicDataReady]);
   const loadingLabels=Object.entries(layerLoading).filter(([,waiting])=>waiting).map(([key])=>({buildings:"bâtiments",mos:"MOS 2025",plu:"zonage PLU",servitudes:"servitudes",publicLand:"foncier public"}[key]));
   return (
     <main className="urban-tool">
@@ -556,7 +582,7 @@ export default function UrbanismePage() {
             {layers.mos && <div className="mos-mini-legend"><strong>MOS 2025</strong><span><i style={{background:"#18753c"}}/>Nature et forêts</span><span><i style={{background:"#e3b341"}}/>Agriculture</span><span><i style={{background:"#0098d8"}}/>Eau</span><span><i style={{background:"#62b467"}}/>Espaces ouverts</span><span><i style={{background:"#e07a9a"}}/>Habitat</span><span><i style={{background:"#a05a9c"}}/>Activités</span><span><i style={{background:"#5576b9"}}/>Équipements</span><span><i style={{background:"#737b87"}}/>Transports</span><small>Survolez une surface pour lire le poste détaillé parmi les 79 catégories et son évolution depuis 2021.</small></div>}
             {layers.plu && <div className="zone-mini-legend"><span><i style={{background:"#df4f70"}}/>U · urbaine</span><span><i style={{background:"#e3a008"}}/>AU · à urbaniser</span><span><i style={{background:"#d6a721"}}/>A · agricole</span><span><i style={{background:"#27864d"}}/>N · naturelle</span></div>}
             {layers.servitudes && <div className="sup-family-legend"><strong>Familles de servitudes</strong><span><i style={{background:"#e1000f"}}/>Risques</span><span><i style={{background:"#0098d8"}}/>Eau</span><span><i style={{background:"#e3a008"}}/>Réseaux et énergie</span><span><i style={{background:"#0053b3"}}/>Transports</span><span><i style={{background:"#6f4c9b"}}/>Patrimoine</span><span><i style={{background:"#18753c"}}/>Environnement</span><small>Survolez une zone, une ligne ou un point pour connaître la catégorie, l’objet et l’identifiant GPU.</small></div>}
-            {layers.publicLand && <div className="public-mini-legend"><span><i style={{background:"#e1000f"}}/>État</span><span><i style={{background:"#6f4c9b"}}/>Région</span><span><i style={{background:"#000091"}}/>Département</span><span><i style={{background:"#18753c"}}/>Commune</span><span><i style={{background:"#0098d8"}}/>HLM</span><span><i style={{background:"#7b61a8"}}/>Établissement</span></div>}
+            {layers.publicLand && <div className="public-land-controls"><strong>Quel foncier afficher ?</strong><div><button type="button" className={publicLandFilter==="state"?"active":""} onClick={()=>setPublicLandFilter("state")}><i style={{background:"#e1000f"}}/>État uniquement</button><button type="button" className={publicLandFilter==="all"?"active":""} onClick={()=>setPublicLandFilter("all")}>Tout le foncier public</button></div><label>Afficher le foncier de l’État par commune<select defaultValue="" onChange={(event)=>{if(event.target.value)exploreCommune(event.target.value);}}><option value="">Choisir une commune…</option>{stateLandByCommune.map((item)=><option key={item.code} value={item.code}>{item.name} · {item.count.toLocaleString("fr-FR")} parcelles</option>)}</select></label>{publicLandFilter==="all"&&<div className="public-mini-legend"><span><i style={{background:"#e1000f"}}/>État</span><span><i style={{background:"#6f4c9b"}}/>Région</span><span><i style={{background:"#000091"}}/>Département</span><span><i style={{background:"#18753c"}}/>Commune</span><span><i style={{background:"#0098d8"}}/>HLM</span><span><i style={{background:"#7b61a8"}}/>Établissement</span></div>}</div>}
             <p className="public-land-note"><i/>Référentiel présumé : parcelles de personnes morales classées État, région, département, communes, HLM, SEM et établissements publics — millésime 2025.</p>
           </section>
           <details className="urban-services"><summary><span><strong>Sources publiques</strong><small>{Object.values(services).filter((state)=>state==="online").length}/7 services disponibles</small></span><b>{Object.values(services).every((state)=>state==="online")?"Connecté":"Vérification"}</b></summary><div className="urban-service-grid">{Object.entries(services).map(([name,state])=><span key={name}><i className={state}/><strong>{name}</strong><small>{state==="online"?"Disponible":state==="error"?"Indisponible":"Connexion…"}</small></span>)}</div></details>
