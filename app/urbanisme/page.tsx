@@ -137,7 +137,7 @@ export default function UrbanismePage() {
     const launch = () => {
       const L = (window as any).L;
       if (!L || !mapNode.current || mapRef.current) return;
-      const map = L.map(mapNode.current, { zoomControl: false, maxBoundsViscosity: .65 }).setView([49.075, 2.105], 10);
+      const map = L.map(mapNode.current, { zoomControl: false, maxBoundsViscosity: .65 }).fitBounds([[48.89, 1.60], [49.25, 2.60]], { padding: [8, 8] });
       map.createPane("departmentMaskPane"); map.getPane("departmentMaskPane").style.zIndex="450";
       L.control.zoom({ position: "bottomright" }).addTo(map);
       L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png", { className: "urban-base-tiles", maxZoom: 20, subdomains: "abcd", attribution: "© OpenStreetMap · © CARTO" }).addTo(map);
@@ -258,7 +258,7 @@ export default function UrbanismePage() {
           setCommunes([...(communes.features || [])].sort((a:any,b:any) => String(a.properties?.nom || "").localeCompare(String(b.properties?.nom || ""), "fr")));
           const territory = L.geoJSON(communes, { style: { color: "#64748b", weight: .7, fillColor: "#000091", fillOpacity: .025 }, interactive: false }).addTo(map);
           const bounds = territory.getBounds();
-          if (bounds.isValid()) { departmentBoundsRef.current=bounds;map.fitBounds(bounds, { padding: [25, 25] }); map.setMaxBounds(bounds.pad(.28)); }
+          if (bounds.isValid()) { departmentBoundsRef.current=bounds;map.fitBounds(bounds, { padding: [10, 10] }); map.setMaxBounds(bounds.pad(.28)); }
           if(layersStateRef.current.publicLand)map.fire("moveend");
         }).catch(() => undefined);
       fetch("https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=ADMINEXPRESS-COG-CARTO-PE.LATEST%3Adepartement&outputFormat=application%2Fjson&CQL_FILTER=code_insee%3D%2795%27&srsName=EPSG%3A4326").then((response)=>response.json()).then((data)=>{const geometry=data.features?.[0]?.geometry;if(!geometry)return;const polygons=geometry.type==="MultiPolygon"?geometry.coordinates:[geometry.coordinates];const holes=polygons.map((polygon:any)=>polygon[0].map(([lon,lat]:number[])=>[lat,lon]));const world=[[-85,-180],[-85,180],[85,180],[85,-180]];departmentMaskRef.current=L.polygon([world,...holes],{pane:"departmentMaskPane",stroke:false,fillColor:"#f4f6fb",fillOpacity:.82,fillRule:"evenodd",interactive:false}).addTo(map);L.geoJSON(data,{pane:"departmentMaskPane",style:{color:"#000091",weight:3,fill:false},interactive:false}).addTo(map);}).catch(()=>undefined);
@@ -404,7 +404,7 @@ export default function UrbanismePage() {
       selectionPointRef.current = null;
       if (communeFocusLayerRef.current) map.removeLayer(communeFocusLayerRef.current);
       communeFocusLayerRef.current = null;
-      map.setMinZoom(9); map.setView([49.075, 2.105], 10);
+      map.setMinZoom(9); const bounds=departmentBoundsRef.current; if(bounds?.isValid()) map.fitBounds(bounds,{padding:[10,10]}); else map.fitBounds([[48.89,1.60],[49.25,2.60]],{padding:[8,8]});
     }
     setQuery("");
     setResult(null);
