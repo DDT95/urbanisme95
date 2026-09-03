@@ -79,6 +79,14 @@ function supFamily(code:string){ if(/^AC|^AR|^INT|^JS/.test(code))return "Patrim
 function supColor(feature:any){ const colors:Record<string,string>={"Patrimoine et équipements":"#6f4c9b",Risques:"#e1000f",Eau:"#0098d8","Réseaux et énergie":"#e3a008",Transports:"#0053b3","Agriculture et environnement":"#18753c","Autres servitudes":"#687787"}; return colors[supFamily(supCode(feature))]; }
 function supTitle(feature:any){ const p=feature?.properties||{}, code=supCode(feature); return firstValue(p,["nomsuplitt","nomreg"],"") || supDescription(code); }
 function escapeHtml(value:unknown){ return String(value??"").replace(/[&<>"']/g,(character)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[character]||character)); }
+const publicBuildingNatures = new Set(["Mairie","Préfecture","Sous-préfecture","Hôtel de région","Hôtel de département","Établissement de santé","Établissement pénitentiaire"]);
+function isPublicBuildingFeature(feature:any){
+  const properties=feature?.properties||{};
+  const nature=String(properties.nature||""), usage1=String(properties.usage_1||""), usage2=String(properties.usage_2||"");
+  return publicBuildingNatures.has(nature) || usage1==="Religieux" || usage2==="Religieux" || usage1==="Sportif" || usage2==="Sportif";
+}
+function dpeColor(classe:string){ return ({A:"#008941",B:"#3cb44a",C:"#a8c936",D:"#e3b341",E:"#e07a2c",F:"#e1541f",G:"#c1121f"} as Record<string,string>)[String(classe||"").toUpperCase()] || "#687787"; }
+function publicRiskColor(count:number){ if(count>=4)return "#c1121f"; if(count>=2)return "#e1541f"; if(count>=1)return "#e3b341"; return "#687787"; }
 
 export default function UrbanismePage() {
   const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -104,6 +112,10 @@ export default function UrbanismePage() {
   const departmentMaskRef = useRef<any>(null);
   const mosRequestRef = useRef<AbortController | null>(null);
   const gpuRequestRef = useRef<AbortController | null>(null);
+  const dpePublicLayerRef = useRef<any>(null);
+  const dpePublicRequestRef = useRef<AbortController | null>(null);
+  const publicRisksLayerRef = useRef<any>(null);
+  const publicRisksRequestRef = useRef<AbortController | null>(null);
   const markerRef = useRef<any>(null);
   const communeFocusLayerRef = useRef<any>(null);
   const selectionPointRef = useRef<[number, number] | null>(null);
@@ -118,11 +130,11 @@ export default function UrbanismePage() {
   const [communeQuery, setCommuneQuery] = useState("");
   const [communeSuggestionsOpen, setCommuneSuggestionsOpen] = useState(false);
   const [activeCommune, setActiveCommune] = useState("");
-  const [layers, setLayers] = useState({ parcels: false, buildings: false, mos: false, plu: false, servitudes: false, publicLand: false });
+  const [layers, setLayers] = useState({ parcels: false, buildings: false, mos: false, plu: false, servitudes: false, publicLand: false, dpePublic: false, publicRisks: false });
   const [publicLandFilter, setPublicLandFilter] = useState<"state"|"all">("state");
   const publicLandFilterRef = useRef<"state"|"all">("state");
   const [publicDataReady, setPublicDataReady] = useState(false);
-  const [layerLoading, setLayerLoading] = useState({ buildings:false, mos:false, plu:false, servitudes:false, publicLand:false });
+  const [layerLoading, setLayerLoading] = useState({ buildings:false, mos:false, plu:false, servitudes:false, publicLand:false, dpePublic:false, publicRisks:false });
   const [services, setServices] = useState<Record<string,"checking"|"online"|"error">>({ Adresse:"checking", Cadastre:"checking", Urbanisme:"checking", Risques:"checking", Bâti:"checking", MOS:"checking", Foncier:"checking" });
   const [message, setMessage] = useState("Recherchez une adresse ou cliquez sur la carte.");
   const layersStateRef = useRef(layers);
@@ -248,9 +260,70 @@ export default function UrbanismePage() {
         } catch (error:any) { if(error?.name!=="AbortError"){console.warn("Foncier public indisponible", error);setLayerFeedback("Le référentiel du foncier public ne répond pas momentanément.");} }
         finally { publicDepartmentLoadingRef.current=false;setLayerLoading((current)=>({...current,publicLand:false})); }
       };
+      const fetchPublicBuildings = async (bounds:any, signal:AbortSignal) => {
+        const bbox=[bounds.getWest(),bounds.getSouth(),bounds.getEast(),bounds.getNorth(),"EPSG:4326"].join(",");
+        const response=await fetch(`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3%3Abatiment&srsName=EPSG%3A4326&BBOX=${bbox}&outputFormat=application%2Fjson&COUNT=2000`,{signal});
+        if(!response.ok)throw new Error("Bâtiments indisponibles");
+        const data=await response.json();
+        return (data.features||[]).filter(isPublicBuildingFeature);
+      };
+      const refreshDpePublic = async () => {
+        if (!layersStateRef.current.dpePublic) {
+          if (dpePublicLayerRef.current && map.hasLayer(dpePublicLayerRef.current)) map.removeLayer(dpePublicLayerRef.current);
+          dpePublicRequestRef.current?.abort();setLayerLoading((current)=>({...current,dpePublic:false}));
+          return;
+        }
+        if (map.getZoom() < 16) {
+          if (dpePublicLayerRef.current && map.hasLayer(dpePublicLayerRef.current)) map.removeLayer(dpePublicLayerRef.current);
+          setLayerFeedback("Zoomez au niveau 16 pour afficher le DPE des bâtiments publics, bâtiment par bâtiment.");
+          return;
+        }
+        setLayerLoading((current)=>({...current,dpePublic:true}));
+        dpePublicRequestRef.current?.abort();const controller=new AbortController();dpePublicRequestRef.current=controller;
+        try {
+          const buildings=(await fetchPublicBuildings(map.getBounds(),controller.signal)).slice(0,60);
+          setLayerFeedback(`Recherche du DPE pour ${buildings.length} bâtiment${buildings.length>1?"s":""} public${buildings.length>1?"s":""} dans cette vue…`);
+          const results:any[]=[];let cursor=0;
+          const worker=async()=>{while(cursor<buildings.length){const feature=buildings[cursor++];const[lon,lat]=geometryCenter(feature.geometry);let dpeClasse="";try{const parcelResponse=await fetch(`https://apicarto.ign.fr/api/cadastre/parcelle?geom=${pointGeometry(lon,lat)}`,{signal:controller.signal});const parcelData:FeatureCollection=parcelResponse.ok?await parcelResponse.json():emptyCollection;const parcelId=firstValue(parcelData.features?.[0]?.properties,["idu"],"");if(parcelId){const bdnbResponse=await fetch(`https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/parcelle?parcelle_id=eq.${encodeURIComponent(parcelId)}`,{signal:controller.signal});const bdnbData=bdnbResponse.ok?await bdnbResponse.json():[];const entry=Array.isArray(bdnbData)?bdnbData[0]:null;dpeClasse=entry?.classe_bilan_dpe||entry?.classe_conso_energie_arrete_2012||"";}}catch(error:any){if(error?.name==="AbortError")return;}results.push({...feature,properties:{...feature.properties,dpe_classe:dpeClasse||"Non renseigné"}});}};
+          await Promise.all(Array.from({length:Math.min(5,buildings.length)},()=>worker()));
+          if(controller.signal.aborted)return;
+          const previous=dpePublicLayerRef.current;
+          dpePublicLayerRef.current=L.geoJSON({type:"FeatureCollection",features:results},{style:(feature:any)=>({color:dpeColor(feature.properties?.dpe_classe),weight:2,fillColor:dpeColor(feature.properties?.dpe_classe),fillOpacity:.6}),onEachFeature:(feature:any,layer:any)=>{const p=feature.properties||{};layer.bindTooltip(`<div class="simple-map-tooltip"><b>${escapeHtml(p.nature||p.usage_1||"Bâtiment public")}</b><span>DPE : ${escapeHtml(p.dpe_classe||"Non renseigné")}</span></div>`,{sticky:true,className:"urban-map-tooltip"});}}).addTo(map);
+          if(previous&&map.hasLayer(previous))map.removeLayer(previous);
+          setLayerFeedback(`DPE des bâtiments publics : ${results.length} bâtiment${results.length>1?"s":""} affiché${results.length>1?"s":""} dans cette vue.`);
+        } catch(error:any){ if(error?.name!=="AbortError")setLayerFeedback("Le DPE des bâtiments publics n’est pas disponible pour le moment."); }
+        finally { if(dpePublicRequestRef.current===controller)setLayerLoading((current)=>({...current,dpePublic:false})); }
+      };
+      const refreshPublicRisks = async () => {
+        if (!layersStateRef.current.publicRisks) {
+          if (publicRisksLayerRef.current && map.hasLayer(publicRisksLayerRef.current)) map.removeLayer(publicRisksLayerRef.current);
+          publicRisksRequestRef.current?.abort();setLayerLoading((current)=>({...current,publicRisks:false}));
+          return;
+        }
+        if (map.getZoom() < 16) {
+          if (publicRisksLayerRef.current && map.hasLayer(publicRisksLayerRef.current)) map.removeLayer(publicRisksLayerRef.current);
+          setLayerFeedback("Zoomez au niveau 16 pour afficher les risques des bâtiments publics, bâtiment par bâtiment.");
+          return;
+        }
+        setLayerLoading((current)=>({...current,publicRisks:true}));
+        publicRisksRequestRef.current?.abort();const controller=new AbortController();publicRisksRequestRef.current=controller;
+        try {
+          const buildings=(await fetchPublicBuildings(map.getBounds(),controller.signal)).slice(0,80);
+          setLayerFeedback(`Recherche des risques Géorisques pour ${buildings.length} bâtiment${buildings.length>1?"s":""} public${buildings.length>1?"s":""} dans cette vue…`);
+          const results:any[]=[];let cursor=0;
+          const worker=async()=>{while(cursor<buildings.length){const feature=buildings[cursor++];const[lon,lat]=geometryCenter(feature.geometry);let riskCount=0,riskNames="";try{const response=await fetch(`https://georisques.gouv.fr/api/v1/gaspar/risques?latlon=${lon},${lat}`,{signal:controller.signal});const data=response.ok?await response.json():{data:[]};const riskDetails=(data.data||[]).flatMap((entry:any)=>entry.risques_detail||[]);riskCount=riskDetails.length;riskNames=uniqueValues(riskDetails.map((risk:any)=>risk.libelle_risque_long||risk.libelle_risque_jo||risk.risque)).join(", ");}catch(error:any){if(error?.name==="AbortError")return;}results.push({...feature,properties:{...feature.properties,risk_count:riskCount,risk_names:riskNames}});}};
+          await Promise.all(Array.from({length:Math.min(6,buildings.length)},()=>worker()));
+          if(controller.signal.aborted)return;
+          const previous=publicRisksLayerRef.current;
+          publicRisksLayerRef.current=L.geoJSON({type:"FeatureCollection",features:results},{style:(feature:any)=>{const color=publicRiskColor(numberValue(feature.properties?.risk_count));return{color,weight:2,fillColor:color,fillOpacity:.55};},onEachFeature:(feature:any,layer:any)=>{const p=feature.properties||{};layer.bindTooltip(`<div class="simple-map-tooltip"><b>${escapeHtml(p.nature||p.usage_1||"Bâtiment public")}</b><span>${numberValue(p.risk_count)} risque${numberValue(p.risk_count)>1?"s":""} recensé${numberValue(p.risk_count)>1?"s":""}</span>${p.risk_names?`<small>${escapeHtml(p.risk_names)}</small>`:""}</div>`,{sticky:true,className:"urban-map-tooltip"});}}).addTo(map);
+          if(previous&&map.hasLayer(previous))map.removeLayer(previous);
+          setLayerFeedback(`Risques des bâtiments publics : ${results.length} bâtiment${results.length>1?"s":""} analysé${results.length>1?"s":""} dans cette vue.`);
+        } catch(error:any){ if(error?.name!=="AbortError")setLayerFeedback("Géorisques ne répond pas pour les bâtiments publics."); }
+        finally { if(publicRisksRequestRef.current===controller)setLayerLoading((current)=>({...current,publicRisks:false})); }
+      };
       const adaptLayerReadability=()=>{const zoom=map.getZoom();parcelTilesRef.current?.setOpacity(zoom>=15?.92:zoom>=13?.68:.48);buildingTilesRef.current?.setOpacity(zoom>=16?.9:zoom>=14?.62:.38);if(mosLayerRef.current?.setStyle)mosLayerRef.current.setStyle((feature:any)=>({color:mosColor(numberValue(feature?.properties?.mos2025)),weight:zoom>=14?.8:.5,fillColor:mosColor(numberValue(feature?.properties?.mos2025)),fillOpacity:zoom>=14?.52:.34}));if(pluTilesRef.current?.setStyle)pluTilesRef.current.setStyle((feature:any)=>({color:zoneColor(feature),weight:zoom>=14?1.5:1,fillColor:zoneColor(feature),fillOpacity:zoom>=14?.26:.18}));if(supTilesRef.current?.setStyle)supTilesRef.current.setStyle((feature:any)=>({color:supColor(feature),weight:zoom>=14?2.5:1.7,fillColor:supColor(feature),fillOpacity:zoom>=14?.10:.055,dashArray:feature.geometry?.type?.includes("Polygon")?"7 5":undefined}));};
-      map.on("zoomend", () => { setMapZoom(map.getZoom()); adaptLayerReadability(); refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); });
-      map.on("moveend", () => { refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); });
+      map.on("zoomend", () => { setMapZoom(map.getZoom()); adaptLayerReadability(); refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); refreshDpePublic(); refreshPublicRisks(); });
+      map.on("moveend", () => { refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); refreshDpePublic(); refreshPublicRisks(); });
       fetch("https://geo.api.gouv.fr/departements/95/communes?fields=nom,code,contour&format=geojson&geometry=contour")
         .then((response) => response.json())
         .then((communes) => {
@@ -288,7 +361,9 @@ export default function UrbanismePage() {
     if (!layers.servitudes && supTilesRef.current) { map.removeLayer(supTilesRef.current); supTilesRef.current=null; }
     if (!layers.plu && pluOverviewLayerRef.current && map.hasLayer(pluOverviewLayerRef.current)) map.removeLayer(pluOverviewLayerRef.current);
     if (!layers.servitudes && supOverviewLayerRef.current && map.hasLayer(supOverviewLayerRef.current)) map.removeLayer(supOverviewLayerRef.current);
-    if (layers.buildings || layers.mos || layers.publicLand || layers.plu || layers.servitudes) map.fire("moveend");
+    if (!layers.dpePublic && dpePublicLayerRef.current && map.hasLayer(dpePublicLayerRef.current)) map.removeLayer(dpePublicLayerRef.current);
+    if (!layers.publicRisks && publicRisksLayerRef.current && map.hasLayer(publicRisksLayerRef.current)) map.removeLayer(publicRisksLayerRef.current);
+    if (layers.buildings || layers.mos || layers.publicLand || layers.plu || layers.servitudes || layers.dpePublic || layers.publicRisks) map.fire("moveend");
     if (result && selectionPointRef.current) {
       const [lon, lat] = selectionPointRef.current;
       drawResults(lon, lat, result.parcel ? { type: "FeatureCollection", features: [result.parcel] } : emptyCollection, { type: "FeatureCollection", features: result.zones }, { type: "FeatureCollection", features: result.servitudes });
@@ -550,7 +625,7 @@ export default function UrbanismePage() {
     Object.entries(publicLandDataRef.current).forEach(([id,info])=>{if(info[0]==="1"){const code=id.slice(0,5);counts[code]=(counts[code]||0)+1;}});
     return communes.map((feature:any)=>({code:String(feature.properties?.code||""),name:String(feature.properties?.nom||"Commune"),count:counts[String(feature.properties?.code||"")]||0})).filter((item)=>item.count>0).sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name,"fr"));
   }, [communes,publicDataReady]);
-  const loadingLabels=Object.entries(layerLoading).filter(([,waiting])=>waiting).map(([key])=>({buildings:"bâtiments",mos:"MOS 2025",plu:"zonage PLU",servitudes:"servitudes",publicLand:"foncier public"}[key]));
+  const loadingLabels=Object.entries(layerLoading).filter(([,waiting])=>waiting).map(([key])=>({buildings:"bâtiments",mos:"MOS 2025",plu:"zonage PLU",servitudes:"servitudes",publicLand:"foncier public",dpePublic:"DPE bâtiments publics",publicRisks:"risques bâtiments publics"}[key]));
   return (
     <main className="urban-tool">
       <header className="urban-observatory-header">
@@ -565,7 +640,6 @@ export default function UrbanismePage() {
           <div className="commune-autocomplete"><label htmlFor="urban-commune">Explorer directement une commune</label><div><input id="urban-commune" value={communeQuery} placeholder="Commencez à saisir : Pontoise…" autoComplete="off" onFocus={()=>setCommuneSuggestionsOpen(true)} onChange={(event)=>{setCommuneQuery(event.target.value);setCommuneSuggestionsOpen(true);setCommuneCode("");}}/>{communeSuggestionsOpen && communeQuery.trim().length>0 && <div className="commune-suggestions">{communes.filter((item)=>String(item.properties?.nom||"").toLocaleLowerCase("fr").includes(communeQuery.toLocaleLowerCase("fr"))).slice(0,6).map((item)=><button key={item.properties?.code} type="button" onClick={()=>{setCommuneCode(item.properties.code);exploreCommune(item.properties.code);}}><strong>{item.properties?.nom}</strong><small>Val-d’Oise · {item.properties?.code}</small></button>)}</div>}</div>{activeCommune && <p><i/>Vous explorez <strong>{activeCommune}</strong><button type="button" onClick={resetSearch}>Quitter</button></p>}</div>
           <div className={`urban-message ${loading ? "loading" : ""}`}><i />{message}</div>
           {(result || query) && !loading && <button className="reset-search" type="button" onClick={resetSearch}><span aria-hidden="true">↺</span> Nouvelle recherche</button>}
-          <div className="map-reading-card"><strong>Lecture de la carte</strong><p>Choisissez une information puis cliquez sur une parcelle. PLU et servitudes s’affichent séparément pour garder une carte lisible ; la fiche réunit les deux.</p></div>
           <section className="urban-layer-panel" aria-labelledby="urban-layer-title">
             <div className="urban-layer-head"><span><small>Lecture de la carte</small><strong id="urban-layer-title">Informations affichées</strong></span><b>Niveau {mapZoom}</b></div>
             <div className="urban-layer-list">
@@ -576,8 +650,12 @@ export default function UrbanismePage() {
                 ["plu","Zonage PLU","Carte GPU continue + détail au clic","#18753c"],
                 ["servitudes","Servitudes","Carte GPU continue + détail au clic","#6f4c9b"],
                 ["publicLand","Foncier public","État, collectivités, HLM et établissements","#008941"],
+                ["dpePublic","DPE - Bâtiments publics","Classe énergétique des équipements publics, niveau 16","#e07a2c"],
+                ["publicRisks","Bâtiments publics - risques","Risques Géorisques par équipement public, niveau 16","#c1121f"],
               ] as const).map(([key,label,description,color]) => {const waiting=key in layerLoading&&layerLoading[key as keyof typeof layerLoading];return <button key={key} type="button" role="switch" className={`urban-layer-toggle ${waiting?"is-loading":""}`} onClick={() => toggleLayer(key)} aria-checked={layers[key]} aria-busy={waiting}><i style={{background:color}}/><span><strong>{label}{waiting&&<em className="layer-spinner" aria-hidden="true"/>}</strong><small>{waiting?"Chargement des données…":description}</small></span><b aria-hidden="true"><em/></b></button>})}
             </div>
+            {layers.dpePublic && <div className="mos-mini-legend"><strong>DPE des bâtiments publics</strong><span><i style={{background:"#008941"}}/>A</span><span><i style={{background:"#3cb44a"}}/>B</span><span><i style={{background:"#a8c936"}}/>C</span><span><i style={{background:"#e3b341"}}/>D</span><span><i style={{background:"#e07a2c"}}/>E</span><span><i style={{background:"#e1541f"}}/>F</span><span><i style={{background:"#c1121f"}}/>G</span><small>Mairies, préfectures, établissements de santé, lieux de culte et équipements sportifs (BD TOPO), classe DPE issue de la BDNB.</small></div>}
+            {layers.publicRisks && <div className="mos-mini-legend"><strong>Risques des bâtiments publics</strong><span><i style={{background:"#687787"}}/>Aucun risque recensé</span><span><i style={{background:"#e3b341"}}/>1 risque</span><span><i style={{background:"#e1541f"}}/>2-3 risques</span><span><i style={{background:"#c1121f"}}/>4 risques ou plus</span><small>Risques Géorisques interrogés au centre de chaque équipement public visible à l’écran.</small></div>}
             {(layers.parcels||layers.buildings)&&<div className="base-layer-legend"><strong>Repères cadastraux</strong>{layers.parcels&&<span><i className="parcel-symbol"/>Limite parcellaire bleue</span>}{layers.buildings&&<span><i className="building-symbol"/>Bâtiment en gris plein</span>}<small>Ces formes grises sont uniquement les empreintes bâties, jamais du zonage. Cliquez dans une parcelle pour afficher sa fiche complète.</small></div>}
             {layers.mos && <div className="mos-mini-legend"><strong>MOS 2025</strong><span><i style={{background:"#18753c"}}/>Nature et forêts</span><span><i style={{background:"#e3b341"}}/>Agriculture</span><span><i style={{background:"#0098d8"}}/>Eau</span><span><i style={{background:"#62b467"}}/>Espaces ouverts</span><span><i style={{background:"#e07a9a"}}/>Habitat</span><span><i style={{background:"#a05a9c"}}/>Activités</span><span><i style={{background:"#5576b9"}}/>Équipements</span><span><i style={{background:"#737b87"}}/>Transports</span><small>Survolez une surface pour lire le poste détaillé parmi les 79 catégories et son évolution depuis 2021.</small></div>}
             {layers.plu && <div className="zone-mini-legend"><span><i style={{background:"#df4f70"}}/>U · urbaine</span><span><i style={{background:"#e3a008"}}/>AU · à urbaniser</span><span><i style={{background:"#d6a721"}}/>A · agricole</span><span><i style={{background:"#27864d"}}/>N · naturelle</span></div>}
