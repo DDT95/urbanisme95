@@ -171,11 +171,13 @@ export default function UrbanismePage() {
         if(!wantsZones&&pluOverviewLayerRef.current&&map.hasLayer(pluOverviewLayerRef.current))map.removeLayer(pluOverviewLayerRef.current);
         if(!wantsSup&&supOverviewLayerRef.current&&map.hasLayer(supOverviewLayerRef.current))map.removeLayer(supOverviewLayerRef.current);
         if (!wantsZones && !wantsSup) return;
-        if(map.getZoom()<13){
+        if(map.getZoom()<11){
           if(wantsZones&&!map.hasLayer(pluOverviewLayerRef.current))pluOverviewLayerRef.current.addTo(map);
           if(wantsSup&&!map.hasLayer(supOverviewLayerRef.current))supOverviewLayerRef.current.addTo(map);
-          setLayerFeedback(wantsZones?"Vue départementale du PLU sur tout le Val-d’Oise. Le détail des zones et les infobulles apparaissent au niveau 13.":"Vue départementale des servitudes sur tout le Val-d’Oise. Leurs géométries et infobulles détaillées apparaissent au niveau 13.");return;
+          setLayerFeedback(wantsZones?"Vue synthétique du PLU. Les géométries précises et infobulles apparaissent au niveau 11.":"Vue synthétique des servitudes. Les géométries précises et infobulles apparaissent au niveau 11.");return;
         }
+        if(wantsZones&&pluOverviewLayerRef.current&&map.hasLayer(pluOverviewLayerRef.current))map.removeLayer(pluOverviewLayerRef.current);
+        if(wantsSup&&supOverviewLayerRef.current&&map.hasLayer(supOverviewLayerRef.current))map.removeLayer(supOverviewLayerRef.current);
         setLayerLoading((current)=>({...current,plu:wantsZones,servitudes:wantsSup}));
         const bounds=map.getBounds();
         const geometry=encodeURIComponent(JSON.stringify({type:"Polygon",coordinates:[[[bounds.getWest(),bounds.getSouth()],[bounds.getEast(),bounds.getSouth()],[bounds.getEast(),bounds.getNorth()],[bounds.getWest(),bounds.getNorth()],[bounds.getWest(),bounds.getSouth()]]]}));
