@@ -102,6 +102,7 @@ export default function UrbanismePage() {
   const pluOverviewLayerRef = useRef<any>(null);
   const supOverviewLayerRef = useRef<any>(null);
   const mosLayerRef = useRef<any>(null);
+  const mosOverviewLayerRef = useRef<any>(null);
   const publicLandLayerRef = useRef<any>(null);
   const publicLandDataRef = useRef<Record<string,[string,string,string]> | null>(null);
   const publicRequestRef = useRef<AbortController | null>(null);
@@ -154,10 +155,10 @@ export default function UrbanismePage() {
       L.control.zoom({ position: "bottomright" }).addTo(map);
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { className: "urban-base-tiles", maxZoom: 20, opacity: .38, attribution: "© OpenStreetMap contributors" }).addTo(map);
       parcelTilesRef.current = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=PCI%20vecteur&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png", {
-        className: "parcel-tiles", minZoom: 13, maxZoom: 19, opacity: .82, attribution: "© IGN · DGFiP",
+        className: "parcel-tiles", minZoom: 11, maxZoom: 19, opacity: .82, attribution: "© IGN · DGFiP",
       }).addTo(map);
       buildingTilesRef.current = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=BUILDINGS.BUILDINGS&STYLE=normal&TILEMATRIXSET=PM_6_18&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png", {
-        className: "building-tiles", minZoom: 13, maxZoom: 18, opacity: .95, attribution: "© IGN · BD TOPO",
+        className: "building-tiles", minZoom: 11, maxZoom: 18, opacity: .95, attribution: "© IGN · BD TOPO",
       }).addTo(map);
       pluOverviewLayerRef.current=L.tileLayer.wms("https://data.geopf.fr/wms-v/ows",{layers:"document",format:"image/png",transparent:true,version:"1.3.0",opacity:.72,attribution:"© Géoportail de l’urbanisme"});
       supOverviewLayerRef.current=L.tileLayer.wms("https://data.geopf.fr/wms-v/ows",{layers:"sup",format:"image/png",transparent:true,version:"1.3.0",opacity:.48,attribution:"© Géoportail de l’urbanisme"});
@@ -206,21 +207,26 @@ export default function UrbanismePage() {
       const refreshMos = async () => {
         if (!layersStateRef.current.mos) {
           if (mosLayerRef.current && map.hasLayer(mosLayerRef.current)) map.removeLayer(mosLayerRef.current);
+          if (mosOverviewLayerRef.current && map.hasLayer(mosOverviewLayerRef.current)) map.removeLayer(mosOverviewLayerRef.current);
           return;
         }
-        if (map.getZoom() < 10) return;
-        setLayerLoading((current)=>({...current,mos:true}));
         const bounds = map.getBounds();
+        if (map.getZoom() < 13) {
+          if (mosLayerRef.current && map.hasLayer(mosLayerRef.current)) map.removeLayer(mosLayerRef.current);
+          setLayerLoading((current)=>({...current,mos:false}));
+          const size=map.getSize();
+          const exportUrl=`https://geoweb.iau-idf.fr/agsmap1/rest/services/OPENDATA/OpendataIAU4/MapServer/export?bbox=${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}&bboxSR=4326&imageSR=4326&size=${Math.round(size.x)},${Math.round(size.y)}&format=png32&transparent=true&layers=show:25&f=image`;
+          if(mosOverviewLayerRef.current){mosOverviewLayerRef.current.setUrl(exportUrl);mosOverviewLayerRef.current.setBounds(bounds);if(!map.hasLayer(mosOverviewLayerRef.current))mosOverviewLayerRef.current.addTo(map);}
+          else{mosOverviewLayerRef.current=L.imageOverlay(exportUrl,bounds,{opacity:.6,attribution:"© IAU Île-de-France"}).addTo(map);}
+          setLayerFeedback("Vue départementale du MOS 2025 sur tout le Val-d’Oise. Le détail par surface et les infobulles apparaissent au niveau 13.");
+          return;
+        }
+        if (mosOverviewLayerRef.current && map.hasLayer(mosOverviewLayerRef.current)) map.removeLayer(mosOverviewLayerRef.current);
+        setLayerLoading((current)=>({...current,mos:true}));
         mosRequestRef.current?.abort();
         const controller = new AbortController(); mosRequestRef.current = controller;
         const envelope = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].join(",");
         try {
-          if (map.getZoom() < 13) {
-            if (mosLayerRef.current && map.hasLayer(mosLayerRef.current)) map.removeLayer(mosLayerRef.current);
-            setLayerLoading((current)=>({...current,mos:false}));
-            setLayerFeedback("Vue départementale : choisissez une commune ou atteignez le niveau 13 pour afficher le MOS, comme les autres couches détaillées.");
-            return;
-          }
           const countResponse=await fetch(`https://geoweb.iau-idf.fr/agsmap1/rest/services/OPENDATA/OpendataIAU4/MapServer/25/query?f=json&geometry=${envelope}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true`,{signal:controller.signal});
           const total=countResponse.ok?numberValue((await countResponse.json()).count):0,features:any[]=[];let offset=0;
           while(offset<total){const response=await fetch(`https://geoweb.iau-idf.fr/agsmap1/rest/services/OPENDATA/OpendataIAU4/MapServer/25/query?f=geojson&geometry=${envelope}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=mos2025,mos2021,insee&returnGeometry=true&resultRecordCount=1000&resultOffset=${offset}&orderByFields=objectid`,{signal:controller.signal});if(!response.ok)throw new Error("MOS page indisponible");const page=await response.json(),pageFeatures=page.features||[];features.push(...pageFeatures);offset+=pageFeatures.length;setLayerFeedback(`Chargement complet du MOS : ${features.length.toLocaleString("fr-FR")} / ${total.toLocaleString("fr-FR")} surfaces…`);if(!pageFeatures.length)break;}
@@ -355,6 +361,7 @@ export default function UrbanismePage() {
     toggleMapLayer(parcelTilesRef.current, layers.parcels);
     toggleMapLayer(buildingTilesRef.current, layers.buildings);
     if (!layers.mos && mosLayerRef.current && map.hasLayer(mosLayerRef.current)) map.removeLayer(mosLayerRef.current);
+    if (!layers.mos && mosOverviewLayerRef.current && map.hasLayer(mosOverviewLayerRef.current)) map.removeLayer(mosOverviewLayerRef.current);
     if (!layers.publicLand && publicLandLayerRef.current && map.hasLayer(publicLandLayerRef.current)) map.removeLayer(publicLandLayerRef.current);
     if (!layers.plu && pluTilesRef.current) { map.removeLayer(pluTilesRef.current); pluTilesRef.current=null; }
     if (!layers.servitudes && supTilesRef.current) { map.removeLayer(supTilesRef.current); supTilesRef.current=null; }
@@ -529,9 +536,9 @@ export default function UrbanismePage() {
     });
     if (enable && map) {
       map.setMinZoom(10);
-      if (map.getZoom() < 13) {
-        setLayerFeedback("Passage automatique au niveau 13 : chargement de la couche détaillée…");
-        window.requestAnimationFrame(() => map.flyTo(map.getCenter(), 13, { duration:.65 }));
+      if (map.getZoom() < 11) {
+        setLayerFeedback("Passage automatique au niveau 11 : chargement de la vue départementale…");
+        window.requestAnimationFrame(() => map.flyTo(map.getCenter(), 11, { duration:.65 }));
       } else {
         setLayerFeedback(`Couche ajoutée au niveau ${map.getZoom()} : votre cadrage est conservé.`);
       }
@@ -667,7 +674,7 @@ export default function UrbanismePage() {
         <section className="urban-map-wrap">
           {loadingLabels.length>0&&<div className="map-data-loader" role="status" aria-live="polite"><i/><span><strong>Chargement de la carte</strong><small>{loadingLabels.join(" · ")}</small></span></div>}
           {layers.mos&&<aside className="mos-map-legend" aria-label="Légende du MOS 2025"><strong>MOS 2025 · occupation du sol</strong><div><span><i style={{background:"#18753c"}}/>Nature et forêts</span><span><i style={{background:"#e3b341"}}/>Agriculture</span><span><i style={{background:"#0098d8"}}/>Eau</span><span><i style={{background:"#62b467"}}/>Espaces ouverts</span><span><i style={{background:"#e07a9a"}}/>Habitat</span><span><i style={{background:"#a05a9c"}}/>Activités</span><span><i style={{background:"#5576b9"}}/>Équipements</span><span><i style={{background:"#737b87"}}/>Transports</span></div><small>Survolez une surface pour afficher son usage détaillé et son évolution depuis 2021.</small></aside>}
-          <div className={`map-guidance ${mapZoom >= 13 ? "ready" : "zoom-required"}`} role="status" aria-live="polite"><strong>{mapZoom >= 13 ? "Explorez les données détaillées" : "Zoomez pour afficher les parcelles"}</strong><span>{mapZoom >= 13 ? layerFeedback : "Utilisez les boutons + / −, la molette de la souris ou pincez l’écran. Dès le niveau 13, cliquez sur une parcelle pour ouvrir sa fiche."}</span></div>
+          <div className={`map-guidance ${mapZoom >= 11 ? "ready" : "zoom-required"}`} role="status" aria-live="polite"><strong>{mapZoom >= 11 ? "Explorez les données affichées" : "Zoomez pour afficher les parcelles"}</strong><span>{mapZoom >= 11 ? layerFeedback : "Utilisez les boutons + / −, la molette de la souris ou pincez l’écran. Dès le niveau 11, les couches activées apparaissent sur tout le Val-d’Oise ; le détail précis et le clic sur une parcelle arrivent au niveau 13."}</span></div>
           <div className="urban-legend">{result && <span><i className="parcel"/>Sélection</span>}{layers.buildings && <span><i className="building"/>Bâtiments</span>}{layers.mos && <span><i className="mos"/>MOS</span>}{layers.plu && <span><i className="zone"/>PLU</span>}{layers.servitudes && <span><i className="sup"/>SUP</span>}{layers.publicLand && <span><i className="public"/>Foncier public</span>}</div><div ref={mapNode} className="urban-map" aria-label="Carte interactive d’urbanisme à la parcelle" />
         </section>
       </div>
