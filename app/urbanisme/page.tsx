@@ -91,6 +91,7 @@ function mutationParams(idu:string){ const commune=idu.slice(0,5), sectionPrefix
 function formatEuro(value:unknown){ const amount=numberValue(value); return amount ? new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(amount) : "Non renseignée"; }
 function formatMutationDate(value:unknown){ const date=new Date(String(value||"")); return Number.isNaN(date.getTime()) ? "Date inconnue" : date.toLocaleDateString("fr-FR"); }
 function mutationColor(nature:string){ const label=String(nature||"").toLowerCase(); if(label.includes("vente"))return "#000091"; if(label.includes("échange")||label.includes("echange"))return "#6f4c9b"; if(label.includes("adjudication"))return "#c1121f"; if(label.includes("donation")||label.includes("partage"))return "#18753c"; return "#687787"; }
+function hexToRgb(hex:string):[number,number,number]{ const clean=hex.replace("#",""); return [parseInt(clean.slice(0,2),16),parseInt(clean.slice(2,4),16),parseInt(clean.slice(4,6),16)]; }
 function matchParcelPattern(query:string){
   const match=query.trim().match(/^(?:(\d{5})\s+)?([0-9]{0,3}[A-Za-z]{1,2})\s*[-\/]?\s*(\d{1,4})$/);
   if(!match)return null;
@@ -642,17 +643,79 @@ export default function UrbanismePage() {
     const latestMutation=result.mutations[0];
     const mutationLabel=result.mutations.length?`${result.mutations.length} mutation${result.mutations.length>1?"s":""} recensée${result.mutations.length>1?"s":""} depuis 2019 · dernière le ${formatMutationDate(latestMutation.date_mutation)} pour ${formatEuro(latestMutation.valeur_fonciere)}`:"Aucune mutation retournée par les données DVF.";
     block(14,110,88,32,"Parcelle cadastrale","01",navy,[239,246,255],[["Référence",`${firstValue(parcelProps,["section"],"")} ${firstValue(parcelProps,["numero"],"—")}`],["Contenance",`${firstValue(parcelProps,["contenance"],"—")} m²`],["Commune",result.commune]]);
-    block(108,110,88,38,"Bâtiments","02",[74,85,104],[241,244,249],[["Usage",useLabel],["Construction",String(oldestBuilding||"Non renseignée")],["Hauteur",maxHeight?formatNumber(maxHeight," m"):"Non renseignée"],["Logements",String(dwellingCount||"Non renseigné")]]);
+    block(108,110,88,38,"Bâtiments","02",[74,85,104],[241,244,249],[["Usage",useLabel],["Construction",String(oldestBuilding||"Non renseignée")],["Hauteur",maxHeight?formatNumber(maxHeight," m"):"Non renseignée"],["Logements",String(dwellingCount||"Non renseigné")],["Détail",buildingCount?"voir annexe":"—"]]);
     block(14,147,88,31,"Propriété foncière","03",[24,117,60],[238,248,241],[["Lecture",ownerCategory],["Référentiel",result.publicLand?"DGFiP FPMU 2025":"Donnée privée non diffusée"]]);
     block(108,153,88,27,"Occupation du sol · MOS","04",[227,179,65],[255,248,231],[["Occupation",result.mos?.mos2025?mosLabels[result.mos.mos2025]||`Poste ${result.mos.mos2025}`:"Non renseignée"],["Évolution",result.mos?.mos2021===result.mos?.mos2025?"Stable depuis 2021":"Changement depuis 2021"]]);
-    block(14,185,88,30,"Règles d’urbanisme","05",[24,117,60],[240,248,243],[["Zonage PLU",zoneLabel],["Servitudes",`${result.servitudes.length} assiette(s) intersectée(s)`]]);
-    block(108,185,88,30,"Risques recensés","06",[225,0,15],[255,241,240],[["Synthèse",riskLabel]]);
-    block(14,218,182,20,"Historique des mutations","07",[0,0,145],[239,242,255],[["Synthèse",mutationLabel]]);
+    block(14,185,88,30,"Règles d’urbanisme","05",[24,117,60],[240,248,243],[["Zonage PLU",zoneLabel],["Servitudes",`${result.servitudes.length} assiette(s)${result.servitudes.length?" · voir annexe":""}`]]);
+    block(108,185,88,30,"Risques recensés","06",[225,0,15],[255,241,240],[["Synthèse",riskLabel],["Détail",result.risks.length?"voir annexe":"—"]]);
+    block(14,218,182,20,"Historique des mutations","07",[0,0,145],[239,242,255],[["Synthèse",`${mutationLabel}${result.mutations.length?" · voir annexe":""}`]]);
 
     pdf.setFillColor(255,255,255); pdf.roundedRect(14,241,182,22,3,3,"F"); pdf.setDrawColor(170,181,199); pdf.roundedRect(14,241,182,22,3,3,"S");
     pdf.setTextColor(...deep); pdf.setFont("helvetica","bold"); pdf.setFontSize(8); pdf.text("Sources et portée de la fiche",20,249);
-    pdf.setTextColor(...muted); pdf.setFont("helvetica","normal"); pdf.setFontSize(6.3); pdf.text(pdf.splitTextToSize("DGFiP · IGN Cadastre et BD TOPO · Géoportail de l’urbanisme · BDNB · Institut Paris Region · Géorisques · DVF Etalab. Cette lecture est indicative : les documents opposables et les services officiels restent la référence.",168),20,255);
+    pdf.setTextColor(...muted); pdf.setFont("helvetica","normal"); pdf.setFontSize(6.3); pdf.text(pdf.splitTextToSize("DGFiP · IGN Cadastre et BD TOPO · Géoportail de l’urbanisme · BDNB · Institut Paris Region · Géorisques · DVF Etalab. Cette lecture est indicative : les documents opposables et les services officiels restent la référence. Le détail complet des bâtiments, servitudes, risques et mutations figure dans les pages suivantes.",168),20,255);
     pdf.setDrawColor(214,221,233); pdf.line(14,272,196,272); pdf.setTextColor(...muted); pdf.setFontSize(6); pdf.text("DDT du Val-d’Oise · Atlas territorial",14,278); pdf.setTextColor(...navy); pdf.setFont("helvetica","bold"); pdf.text("Géoportail de l’urbanisme · Géorisques · Cadastre",196,278,{align:"right"});
+
+    const startAnnexPage=(title:string)=>{
+      pdf.addPage();
+      pdf.setFillColor(246,248,253); pdf.rect(0,0,210,297,"F");
+      pdf.setFillColor(...navy); pdf.rect(0,0,210,5,"F");
+      pdf.setTextColor(...deep); pdf.setFont("helvetica","bold"); pdf.setFontSize(16); pdf.text(title,14,19);
+      pdf.setTextColor(...muted); pdf.setFont("helvetica","normal"); pdf.setFontSize(7); pdf.text(`${streetOnly(result.address)} · ${result.commune}`,14,26);
+      pdf.setDrawColor(214,221,233); pdf.line(14,34,196,34);
+      return 44;
+    };
+    const renderAnnexList=(title:string,entries:{title:string;lines:string[];color:[number,number,number]}[])=>{
+      if(!entries.length)return;
+      let sy=startAnnexPage(title);
+      entries.forEach((entry,index)=>{
+        const titleLines=pdf.splitTextToSize(entry.title,160);
+        const bodyLines=entry.lines.flatMap((line)=>pdf.splitTextToSize(line,160));
+        const h=Math.max(22,11+titleLines.length*4+bodyLines.length*3.4);
+        if(sy+h>279){sy=startAnnexPage(`${title} (suite)`);}
+        pdf.setFillColor(255,255,255); pdf.roundedRect(14,sy,182,h,3,3,"F");
+        pdf.setFillColor(...entry.color); pdf.roundedRect(14,sy,4,h,2,2,"F");
+        pdf.setTextColor(...deep); pdf.setFont("helvetica","bold"); pdf.setFontSize(9); pdf.text(titleLines,23,sy+8);
+        let ty=sy+9+titleLines.length*4;
+        pdf.setTextColor(...ink); pdf.setFont("helvetica","normal"); pdf.setFontSize(7);
+        bodyLines.forEach((line:string)=>{ pdf.text(line,23,ty); ty+=3.4; });
+        pdf.setTextColor(...entry.color); pdf.setFont("helvetica","bold"); pdf.text(String(index+1).padStart(2,"0"),190,sy+8,{align:"right"});
+        sy+=h+4;
+      });
+    };
+
+    renderAnnexList("Historique des mutations",result.mutations.map((mutation)=>({
+      title:`${formatMutationDate(mutation.date_mutation)} · ${mutation.nature_mutation||"Mutation"} · ${formatEuro(mutation.valeur_fonciere)}`,
+      lines:[
+        [mutation.type_local,mutation.surface_reelle_bati?`${mutation.surface_reelle_bati} m² bâti`:null,mutation.nombre_pieces_principales?`${mutation.nombre_pieces_principales} pièce(s)`:null,mutation.surface_terrain?`${mutation.surface_terrain} m² de terrain`:null].filter(Boolean).join(" · ")||"Nature du bien non renseignée",
+        `Adresse : ${[mutation.adresse_numero,mutation.adresse_nom_voie].filter(Boolean).join(" ")||"non renseignée"}`,
+      ],
+      color:hexToRgb(mutationColor(mutation.nature_mutation)),
+    })));
+    renderAnnexList("Servitudes concernant la parcelle",result.servitudes.map((servitude)=>{
+      const code=supCode(servitude), p=servitude.properties||{};
+      return {
+        title:`${code} · ${supTitle(servitude)}`,
+        lines:[
+          `${supDescription(code)} · ${firstValue(p,["typeass"],"Emprise non renseignée")}`,
+          `Identifiant GPU : ${firstValue(p,["idass"],"non renseigné")}${p.srcgeoass?` · Source : ${p.srcgeoass}`:""}${p.fichier?` · Acte : ${p.fichier}`:""}`,
+        ],
+        color:hexToRgb(supColor(servitude)),
+      };
+    }));
+    renderAnnexList("Risques recensés",result.risks.map((risk)=>({
+      title:risk.libelle_risque_long||risk.libelle_risque||"Risque",
+      lines:[risk.libelle_risque_jo&&risk.libelle_risque_jo!==risk.libelle_risque_long?risk.libelle_risque_jo:"Source : Géorisques (GASPAR)"],
+      color:[225,0,15],
+    })));
+    renderAnnexList("Bâtiments recensés",result.buildings.map((building,index)=>({
+      title:`Bâtiment ${index+1} · ${building.usage_principal_bdnb_open||"Usage non renseigné"}`,
+      lines:[
+        [building.annee_construction?`Construit en ${building.annee_construction}`:null,building.hauteur_mean?`${formatNumber(numberValue(building.hauteur_mean)," m")} de hauteur`:null,building.nb_log?`${building.nb_log} logement(s)`:null].filter(Boolean).join(" · ")||"Caractéristiques non renseignées",
+        building.classe_bilan_dpe?`DPE : ${building.classe_bilan_dpe}`:"DPE non renseigné",
+      ],
+      color:[74,85,104],
+    })));
+
     const url = URL.createObjectURL(pdf.output("blob"));
     if (viewer) viewer.location.replace(url);
     else window.open(url, "_blank", "noopener,noreferrer");
