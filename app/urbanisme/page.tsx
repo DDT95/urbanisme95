@@ -91,6 +91,13 @@ function mutationParams(idu:string){ const commune=idu.slice(0,5), sectionPrefix
 function formatEuro(value:unknown){ const amount=numberValue(value); return amount ? new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(amount) : "Non renseignée"; }
 function formatMutationDate(value:unknown){ const date=new Date(String(value||"")); return Number.isNaN(date.getTime()) ? "Date inconnue" : date.toLocaleDateString("fr-FR"); }
 function mutationColor(nature:string){ const label=String(nature||"").toLowerCase(); if(label.includes("vente"))return "#000091"; if(label.includes("échange")||label.includes("echange"))return "#6f4c9b"; if(label.includes("adjudication"))return "#c1121f"; if(label.includes("donation")||label.includes("partage"))return "#18753c"; return "#687787"; }
+function parseParcelReference(query:string, fallbackInsee:string){
+  const match=query.trim().match(/^(?:(\d{5})\s+)?([0-9]{0,3}[A-Za-z]{1,2})\s*[-\/]?\s*(\d{1,4})$/);
+  if(!match)return null;
+  const insee=match[1]||fallbackInsee;
+  if(!insee)return null;
+  return { insee, section:match[2].toUpperCase().padStart(2,"0"), numero:match[3].padStart(4,"0") };
+}
 
 export default function UrbanismePage() {
   const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
@@ -422,20 +429,20 @@ export default function UrbanismePage() {
     await inspectPoint(lon, lat, address, addressMeta, "Adresse la plus proche");
   }
 
-  async function inspectPoint(lon: number, lat: number, address: string, addressMeta?: Partial<AddressResult>, addressLabel = "Adresse recherchée") {
+  async function inspectPoint(lon: number, lat: number, address: string, addressMeta?: Partial<AddressResult>, addressLabel = "Adresse recherchée", parcelOverride?: FeatureCollection) {
     setLoading(true); setResult(null); setMessage("Interrogation du cadastre, du GPU et de Géorisques…");
     const geom = pointGeometry(lon, lat);
     try {
       const [parcelResponse, zonesResponse, supSurfaceResponse, supLineResponse, supPointResponse, risksResponse] = await Promise.all([
-        fetch(`https://apicarto.ign.fr/api/cadastre/parcelle?geom=${geom}`),
+        parcelOverride ? Promise.resolve(null) : fetch(`https://apicarto.ign.fr/api/cadastre/parcelle?geom=${geom}`),
         fetch(`https://apicarto.ign.fr/api/gpu/zone-urba?geom=${geom}`),
         fetch(`https://apicarto.ign.fr/api/gpu/assiette-sup-s?geom=${geom}`),
         fetch(`https://apicarto.ign.fr/api/gpu/assiette-sup-l?geom=${geom}`),
         fetch(`https://apicarto.ign.fr/api/gpu/assiette-sup-p?geom=${geom}`),
         fetch(`https://georisques.gouv.fr/api/v1/gaspar/risques?latlon=${lon},${lat}`),
       ]);
-      let parcelData: FeatureCollection = parcelResponse.ok ? await parcelResponse.json() : emptyCollection;
-      if (!parcelData.features?.length) {
+      let parcelData: FeatureCollection = parcelOverride ?? (parcelResponse?.ok ? await parcelResponse.json() : emptyCollection);
+      if (!parcelOverride && !parcelData.features?.length) {
         const nearbyResponse = await fetch(`https://apicarto.ign.fr/api/cadastre/parcelle?geom=${nearbyGeometry(lon, lat)}`);
         parcelData = nearbyResponse.ok ? closestParcel(await nearbyResponse.json(), lon, lat) : emptyCollection;
       }
@@ -565,8 +572,25 @@ export default function UrbanismePage() {
     }
   }
 
+  async function searchParcelReference(reference: { insee: string; section: string; numero: string }) {
+    setLoading(true); setMessage("Recherche de la parcelle…");
+    try {
+      const response = await fetch(`https://apicarto.ign.fr/api/cadastre/parcelle?code_insee=${reference.insee}&section=${reference.section}&numero=${reference.numero}`);
+      const data: FeatureCollection = response.ok ? await response.json() : emptyCollection;
+      const parcel = data.features?.[0];
+      if (!parcel) { setMessage(`Aucune parcelle ${reference.section} ${reference.numero} trouvée pour la commune ${reference.insee}.`); setLoading(false); return; }
+      const [lon, lat] = geometryCenter(parcel.geometry);
+      const communeName = communes.find((item) => String(item.properties?.code) === reference.insee)?.properties?.nom || firstValue(parcel.properties, ["nom_com", "nom_commune"], reference.insee);
+      setActiveCommune(communeName); setCommuneCode(reference.insee);
+      setQuery(`${reference.section} ${reference.numero} — ${communeName}`);
+      await inspectPoint(lon, lat, `${communeName} · Parcelle ${reference.section} ${reference.numero}`, { city: communeName, citycode: reference.insee, coordinates: [lon, lat] }, "Référence cadastrale", data);
+    } catch { setLoading(false); setMessage("La recherche par référence cadastrale est momentanément indisponible."); }
+  }
+
   async function searchAddress(event: React.FormEvent) {
     event.preventDefault(); if (!query.trim()) return;
+    const parcelReference = parseParcelReference(query, communeCode);
+    if (parcelReference) { await searchParcelReference(parcelReference); return; }
     setLoading(true); setMessage("Recherche de l’adresse…");
     try {
       const response = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(query)}&limit=1&autocomplete=0`);
@@ -660,7 +684,7 @@ export default function UrbanismePage() {
       <div className="urban-layout">
         <aside className="urban-panel">
           <div className="urban-panel-title"><h2>Rechercher et comprendre<br/><span>une parcelle</span></h2></div>
-          <form className="urban-search" onSubmit={searchAddress}><div><input id="urban-address" aria-label="Adresse ou référence cadastrale" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Adresse dans le Val-d’Oise…" /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div></form>
+          <form className="urban-search" onSubmit={searchAddress}><div><input id="urban-address" aria-label="Adresse ou référence cadastrale" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Adresse, ou référence cadastrale : AH 0001…" /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div><small className="urban-search-hint">Référence cadastrale : section + numéro (ex. « AH 0001 »), précédés du code INSEE si aucune commune n’est choisie ci-dessous (ex. « 95500 AH 0001 »).</small></form>
           <div className="commune-autocomplete"><label htmlFor="urban-commune">Explorer directement une commune</label><div><input id="urban-commune" value={communeQuery} placeholder="Commencez à saisir : Pontoise…" autoComplete="off" onFocus={()=>setCommuneSuggestionsOpen(true)} onChange={(event)=>{setCommuneQuery(event.target.value);setCommuneSuggestionsOpen(true);setCommuneCode("");}}/>{communeSuggestionsOpen && communeQuery.trim().length>0 && <div className="commune-suggestions">{communes.filter((item)=>String(item.properties?.nom||"").toLocaleLowerCase("fr").includes(communeQuery.toLocaleLowerCase("fr"))).slice(0,6).map((item)=><button key={item.properties?.code} type="button" onClick={()=>{setCommuneCode(item.properties.code);exploreCommune(item.properties.code);}}><strong>{item.properties?.nom}</strong><small>Val-d’Oise · {item.properties?.code}</small></button>)}</div>}</div>{activeCommune && <p><i/>Vous explorez <strong>{activeCommune}</strong><button type="button" onClick={resetSearch}>Quitter</button></p>}</div>
           <div className={`urban-message ${loading ? "loading" : ""}`}><i />{message}</div>
           {(result || query) && !loading && <button className="reset-search" type="button" onClick={resetSearch}><span aria-hidden="true">↺</span> Nouvelle recherche</button>}
