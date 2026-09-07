@@ -91,12 +91,10 @@ function mutationParams(idu:string){ const commune=idu.slice(0,5), sectionPrefix
 function formatEuro(value:unknown){ const amount=numberValue(value); return amount ? new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(amount) : "Non renseignée"; }
 function formatMutationDate(value:unknown){ const date=new Date(String(value||"")); return Number.isNaN(date.getTime()) ? "Date inconnue" : date.toLocaleDateString("fr-FR"); }
 function mutationColor(nature:string){ const label=String(nature||"").toLowerCase(); if(label.includes("vente"))return "#000091"; if(label.includes("échange")||label.includes("echange"))return "#6f4c9b"; if(label.includes("adjudication"))return "#c1121f"; if(label.includes("donation")||label.includes("partage"))return "#18753c"; return "#687787"; }
-function parseParcelReference(query:string, fallbackInsee:string){
+function matchParcelPattern(query:string){
   const match=query.trim().match(/^(?:(\d{5})\s+)?([0-9]{0,3}[A-Za-z]{1,2})\s*[-\/]?\s*(\d{1,4})$/);
   if(!match)return null;
-  const insee=match[1]||fallbackInsee;
-  if(!insee)return null;
-  return { insee, section:match[2].toUpperCase().padStart(2,"0"), numero:match[3].padStart(4,"0") };
+  return { insee:match[1]||"", section:match[2].toUpperCase().padStart(2,"0"), numero:match[3].padStart(4,"0") };
 }
 
 export default function UrbanismePage() {
@@ -589,8 +587,13 @@ export default function UrbanismePage() {
 
   async function searchAddress(event: React.FormEvent) {
     event.preventDefault(); if (!query.trim()) return;
-    const parcelReference = parseParcelReference(query, communeCode);
-    if (parcelReference) { await searchParcelReference(parcelReference); return; }
+    const parcelPattern = matchParcelPattern(query);
+    if (parcelPattern) {
+      const insee = parcelPattern.insee || communeCode;
+      if (!insee) { setMessage("Choisissez d’abord une commune ci-dessus pour chercher par référence cadastrale, ou ajoutez le code INSEE devant la référence (ex. « 95500 AH 0001 »)."); return; }
+      await searchParcelReference({ insee, section: parcelPattern.section, numero: parcelPattern.numero });
+      return;
+    }
     setLoading(true); setMessage("Recherche de l’adresse…");
     try {
       const response = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(query)}&limit=1&autocomplete=0`);
@@ -684,8 +687,8 @@ export default function UrbanismePage() {
       <div className="urban-layout">
         <aside className="urban-panel">
           <div className="urban-panel-title"><h2>Rechercher et comprendre<br/><span>une parcelle</span></h2></div>
-          <form className="urban-search" onSubmit={searchAddress}><div><input id="urban-address" aria-label="Adresse ou référence cadastrale" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Adresse, ou référence cadastrale : AH 0001…" /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div><small className="urban-search-hint">Référence cadastrale : section + numéro (ex. « AH 0001 »), précédés du code INSEE si aucune commune n’est choisie ci-dessous (ex. « 95500 AH 0001 »).</small></form>
-          <div className="commune-autocomplete"><label htmlFor="urban-commune">Explorer directement une commune</label><div><input id="urban-commune" value={communeQuery} placeholder="Commencez à saisir : Pontoise…" autoComplete="off" onFocus={()=>setCommuneSuggestionsOpen(true)} onChange={(event)=>{setCommuneQuery(event.target.value);setCommuneSuggestionsOpen(true);setCommuneCode("");}}/>{communeSuggestionsOpen && communeQuery.trim().length>0 && <div className="commune-suggestions">{communes.filter((item)=>String(item.properties?.nom||"").toLocaleLowerCase("fr").includes(communeQuery.toLocaleLowerCase("fr"))).slice(0,6).map((item)=><button key={item.properties?.code} type="button" onClick={()=>{setCommuneCode(item.properties.code);exploreCommune(item.properties.code);}}><strong>{item.properties?.nom}</strong><small>Val-d’Oise · {item.properties?.code}</small></button>)}</div>}</div>{activeCommune && <p><i/>Vous explorez <strong>{activeCommune}</strong><button type="button" onClick={resetSearch}>Quitter</button></p>}</div>
+          <div className="commune-autocomplete"><label htmlFor="urban-commune">1 · Choisissez une commune <small>(nécessaire pour chercher une parcelle par référence cadastrale)</small></label><div><input id="urban-commune" value={communeQuery} placeholder="Commencez à saisir : Pontoise…" autoComplete="off" onFocus={()=>setCommuneSuggestionsOpen(true)} onChange={(event)=>{setCommuneQuery(event.target.value);setCommuneSuggestionsOpen(true);setCommuneCode("");}}/>{communeSuggestionsOpen && communeQuery.trim().length>0 && <div className="commune-suggestions">{communes.filter((item)=>String(item.properties?.nom||"").toLocaleLowerCase("fr").includes(communeQuery.toLocaleLowerCase("fr"))).slice(0,6).map((item)=><button key={item.properties?.code} type="button" onClick={()=>{setCommuneCode(item.properties.code);exploreCommune(item.properties.code);}}><strong>{item.properties?.nom}</strong><small>Val-d’Oise · {item.properties?.code}</small></button>)}</div>}</div>{activeCommune && <p><i/>Vous explorez <strong>{activeCommune}</strong><button type="button" onClick={resetSearch}>Quitter</button></p>}</div>
+          <form className="urban-search" onSubmit={searchAddress}><label htmlFor="urban-address">2 · Cherchez une adresse ou une parcelle</label><div><input id="urban-address" aria-label="Adresse ou référence cadastrale" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={activeCommune?`Adresse, ou référence cadastrale à ${activeCommune} : AH 0001…`:"Adresse, ou référence cadastrale : 95500 AH 0001…"} /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div><small className="urban-search-hint">{activeCommune?<>Référence cadastrale à <strong>{activeCommune}</strong> : section + numéro (ex. « AH 0001 »).</>:<>Choisissez une commune ci-dessus, puis saisissez la référence cadastrale (ex. « AH 0001 »). Sans commune choisie, précédez-la du code INSEE (ex. « 95500 AH 0001 »).</>}</small></form>
           <div className={`urban-message ${loading ? "loading" : ""}`}><i />{message}</div>
           {(result || query) && !loading && <button className="reset-search" type="button" onClick={resetSearch}><span aria-hidden="true">↺</span> Nouvelle recherche</button>}
           <section className="urban-layer-panel" aria-labelledby="urban-layer-title">
