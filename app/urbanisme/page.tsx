@@ -103,6 +103,8 @@ export default function UrbanismePage() {
   const mapNode = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const layersRef = useRef<any[]>([]);
+  const osmTilesRef = useRef<any>(null);
+  const aerialTilesRef = useRef<any>(null);
   const parcelTilesRef = useRef<any>(null);
   const buildingTilesRef = useRef<any>(null);
   const buildingVectorRef = useRef<any>(null);
@@ -142,6 +144,7 @@ export default function UrbanismePage() {
   const [communeSuggestionsOpen, setCommuneSuggestionsOpen] = useState(false);
   const [activeCommune, setActiveCommune] = useState("");
   const [layers, setLayers] = useState({ parcels: false, buildings: false, mos: false, plu: false, servitudes: false, publicLand: false, dpePublic: false, publicRisks: false });
+  const [basemap, setBasemap] = useState<"plan"|"aerial">("plan");
   const [publicLandFilter, setPublicLandFilter] = useState<"state"|"all">("state");
   const publicLandFilterRef = useRef<"state"|"all">("state");
   const [publicDataReady, setPublicDataReady] = useState(false);
@@ -163,7 +166,10 @@ export default function UrbanismePage() {
       const map = L.map(mapNode.current, { zoomControl: false, maxBoundsViscosity: .65 }).fitBounds([[48.89, 1.60], [49.25, 2.60]], { padding: [8, 8] });
       map.createPane("departmentMaskPane"); map.getPane("departmentMaskPane").style.zIndex="450";
       L.control.zoom({ position: "bottomright" }).addTo(map);
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { className: "urban-base-tiles", maxZoom: 20, opacity: .38, attribution: "© OpenStreetMap contributors" }).addTo(map);
+      osmTilesRef.current = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { className: "urban-base-tiles", maxZoom: 20, opacity: .38, attribution: "© OpenStreetMap contributors" }).addTo(map);
+      aerialTilesRef.current = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg", {
+        className: "aerial-tiles", maxZoom: 20, attribution: "© IGN · Orthophotos",
+      });
       parcelTilesRef.current = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=PCI%20vecteur&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png", {
         className: "parcel-tiles", minZoom: 11, maxZoom: 19, opacity: .82, attribution: "© IGN · DGFiP",
       }).addTo(map);
@@ -392,6 +398,14 @@ export default function UrbanismePage() {
       drawResults(lon, lat, result.parcel ? { type: "FeatureCollection", features: [result.parcel] } : emptyCollection, { type: "FeatureCollection", features: result.zones }, { type: "FeatureCollection", features: result.servitudes });
     }
   }, [layers]);
+
+  useEffect(() => {
+    const map = mapRef.current; if (!map) return;
+    if (basemap === "aerial") {
+      if (aerialTilesRef.current && !map.hasLayer(aerialTilesRef.current)) aerialTilesRef.current.addTo(map);
+      parcelTilesRef.current?.bringToFront(); buildingTilesRef.current?.bringToFront();
+    } else if (aerialTilesRef.current && map.hasLayer(aerialTilesRef.current)) map.removeLayer(aerialTilesRef.current);
+  }, [basemap]);
 
   useEffect(() => {
     publicLandFilterRef.current = publicLandFilter;
@@ -754,6 +768,7 @@ export default function UrbanismePage() {
           <form className="urban-search" onSubmit={searchAddress}><label htmlFor="urban-address">2 · Cherchez une adresse ou une parcelle</label><div><input id="urban-address" aria-label="Adresse ou référence cadastrale" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={activeCommune?`Adresse, ou référence cadastrale à ${activeCommune} : AH 0001…`:"Adresse, ou référence cadastrale : 95500 AH 0001…"} /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div><small className="urban-search-hint">{activeCommune?<>Référence cadastrale à <strong>{activeCommune}</strong> : section + numéro (ex. « AH 0001 »).</>:<>Choisissez une commune ci-dessus, puis saisissez la référence cadastrale (ex. « AH 0001 »). Sans commune choisie, précédez-la du code INSEE (ex. « 95500 AH 0001 »).</>}</small></form>
           <div className={`urban-message ${loading ? "loading" : ""}`}><i />{message}</div>
           {(result || query) && !loading && <button className="reset-search" type="button" onClick={resetSearch}><span aria-hidden="true">↺</span> Nouvelle recherche</button>}
+          <div className="basemap-toggle"><strong>Fond de carte</strong><div><button type="button" className={basemap==="plan"?"active":""} onClick={()=>setBasemap("plan")}>Plan</button><button type="button" className={basemap==="aerial"?"active":""} onClick={()=>setBasemap("aerial")}>Vue aérienne</button></div></div>
           <section className="urban-layer-panel" aria-labelledby="urban-layer-title">
             <div className="urban-layer-head"><span><small>Lecture de la carte</small><strong id="urban-layer-title">Informations affichées</strong></span><b>Niveau {mapZoom}</b></div>
             <div className="urban-layer-list">
