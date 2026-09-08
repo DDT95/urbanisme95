@@ -94,6 +94,24 @@ class TestReadCsvRows(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_combined_section_numero_column_without_comma(self):
+        # En-tête réel rencontré : "id,commune,section numero" (virgule
+        # manquante avant "numero"), valeurs comme "A 327". La colonne
+        # 'id' du CSV est volontairement fausse ici (section AA au lieu
+        # de A) pour vérifier qu'elle est bien ignorée.
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+            f.write("id,commune,section numero\n")
+            f.write("95510000AA0028,95510,A 329\n")
+        try:
+            rows = read_csv_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["section"], "A")
+            self.assertEqual(rows[0]["numero"], "329")
+            self.assertEqual(rows[0]["id"], "955100000A0329")
+        finally:
+            os.remove(path)
+
     def test_invalid_numero_raises_with_line_number(self):
         path = _write_csv(
             [{"commune": "95510", "section": "A", "numero": "12A"}],

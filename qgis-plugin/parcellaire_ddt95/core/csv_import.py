@@ -20,6 +20,7 @@ alors que le format semblait correct). Il est reconstruit à chaque fois
 """
 
 import csv
+import re
 
 from .identifiers import qualified_table, sql_string_literal
 from .idpar import IdparFormatError, build_idpar
@@ -28,6 +29,12 @@ REQUIRED_FIELDS = ("commune", "section", "numero")
 OPTIONAL_FIELDS = ("id", "prefixe", "contenance", "created", "updated", "layer")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
+# Certains exports contiennent "section" et "numero" fusionnés dans une
+# seule colonne, séparés par un espace (ex. en-tête "section numero" sans
+# virgule, valeur "A 327") — pris en charge en repli si les deux colonnes
+# séparées n'existent pas.
+_COMBINED_SECTION_NUMERO_ALIASES = {"sectionnumero", "numerosection"}
+
 # Nombre de lignes par instruction INSERT (évite une requête unique
 # démesurée sur un très gros CSV, sans multiplier les allers-retours réseau).
 BATCH_SIZE = 500
@@ -35,6 +42,10 @@ BATCH_SIZE = 500
 
 class CsvFormatError(ValueError):
     pass
+
+
+def _normalize_header(name):
+    return re.sub(r"[\s_]+", "", name).strip().lower()
 
 
 def read_csv_rows(path, encoding="utf-8-sig"):
@@ -46,17 +57,41 @@ def read_csv_rows(path, encoding="utf-8-sig"):
     obligatoires manquent, ou si un idpar ne peut pas être construit."""
     with open(path, newline="", encoding=encoding) as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames is None:
+        fieldnames = reader.fieldnames
+        if fieldnames is None:
             raise CsvFormatError("Le fichier CSV est vide.")
-        missing = [c for c in REQUIRED_FIELDS if c not in reader.fieldnames]
+
+        combined_field = None
+        if "section" not in fieldnames or "numero" not in fieldnames:
+            normalized = {_normalize_header(f): f for f in fieldnames}
+            for alias in _COMBINED_SECTION_NUMERO_ALIASES:
+                if alias in normalized:
+                    combined_field = normalized[alias]
+                    break
+
+        missing = [
+            c
+            for c in REQUIRED_FIELDS
+            if c not in fieldnames and not (c in ("section", "numero") and combined_field)
+        ]
         if missing:
             raise CsvFormatError(
                 "Colonnes manquantes dans le CSV : " + ", ".join(missing)
             )
+
         rows = []
         for line_no, raw_row in enumerate(reader, start=2):  # 1 = en-tête
-            row = {field: (raw_row.get(field) or "").strip() for field in ALL_FIELDS}
-            if not (row["commune"] and row["section"] and row["numero"]):
+            row = {
+                field: (raw_row.get(field) or "").strip()
+                for field in ALL_FIELDS
+                if field not in ("section", "numero") or not combined_field
+            }
+            if combined_field:
+                parts = (raw_row.get(combined_field) or "").split(None, 1)
+                row["section"] = parts[0] if parts else ""
+                row["numero"] = parts[1].strip() if len(parts) > 1 else ""
+
+            if not (row.get("commune") and row.get("section") and row.get("numero")):
                 continue
             try:
                 row["id"] = build_idpar(
