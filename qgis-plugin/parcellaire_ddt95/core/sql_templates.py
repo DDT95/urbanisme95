@@ -13,26 +13,32 @@ SQL texte).
 """
 
 from . import column_mapping as cm
-from .identifiers import qualified_table, quote_ident, validate_identifier, validate_millesime
+from .identifiers import (
+    InvalidIdentifierError,
+    qualified_table,
+    quote_ident,
+    validate_identifier,
+    validate_millesime,
+)
 
 
 def referentiels(millesime):
     """Renvoie les tables Fichiers Fonciers/GPA qualifiées pour un millésime
-    donné, en supposant le motif standard x_ff<AAAA>_dep. Si un millésime
-    futur ne suit pas ce motif, ajustez cette fonction (seul endroit à
-    modifier pour changer la convention de nommage par année)."""
+    donné, à partir de column_mapping.REFERENTIELS_PAR_MILLESIME (le
+    nommage des schémas/tables FF n'étant pas régulier d'une année sur
+    l'autre, il n'est pas déduit automatiquement)."""
     year = validate_millesime(millesime)
-    refs = {
-        "parcelle": "x_ff{y}_dep.d95_fftp_{y}_pnb10_parcelle".format(y=year),
-        "suf": "x_ff{y}_dep.d95_fftp_{y}_pnb21_suf".format(y=year),
-        "proprietaire": "x_ff{y}_non_ano_dep.d95_fftp_{y}_proprietaire_droit_non_ano".format(
-            y=year
-        ),
-        "gpa": "r_drieat.gpa_annexe_1",
-    }
+    par_millesime = cm.REFERENTIELS_PAR_MILLESIME.get(year)
+    if par_millesime is None:
+        disponibles = ", ".join(str(y) for y in sorted(cm.REFERENTIELS_PAR_MILLESIME))
+        raise InvalidIdentifierError(
+            "Millésime {} non configuré dans column_mapping."
+            "REFERENTIELS_PAR_MILLESIME (millésimes disponibles : {}). "
+            "Ajoutez les noms de schéma/table de ce millésime dans "
+            "core/column_mapping.py.".format(year, disponibles or "aucun")
+        )
     qualified = {}
-    for key, dotted in refs.items():
-        schema, table = dotted.split(".", 1)
+    for key, (schema, table) in par_millesime.items():
         validate_identifier(schema, "schéma référentiel ({})".format(key))
         validate_identifier(table, "table référentiel ({})".format(key))
         qualified[key] = qualified_table(schema, table)
@@ -81,6 +87,12 @@ CREATE TABLE {table} (
 
 
 def create_etat_parcellaire_sql(schema, commande, millesime):
+    """Reproduit fidèlement la requête de production DDT95 (schéma
+    q_26_01_4825, fournie par un collègue) : jointures strictes (JOIN, pas
+    LEFT JOIN) sur la subdivision fiscale et le propriétaire, agrégation
+    SUM(drcsuba) par regroupement de subdivisions, distinction
+    personne physique / personne morale via dqualp pour le nom, la date
+    de naissance et le SIREN."""
     _check(schema, commande)
     year = validate_millesime(millesime)
     refs = referentiels(year)
@@ -91,18 +103,77 @@ def create_etat_parcellaire_sql(schema, commande, millesime):
     s = cm.SUF_COLUMNS
     pr = cm.PROPRIETAIRE_COLUMNS
 
-    def col(alias, mapping, key):
-        return "{}.{}".format(alias, quote_ident(mapping[key]))
+    def pcol(key):
+        return "parc.{}".format(quote_ident(p[key]))
 
+    def scol(key):
+        return "pnb21.{}".format(quote_ident(s[key]))
+
+    def prcol(key):
+        return "proprio.{}".format(quote_ident(pr[key]))
+
+    lieudit = "CONCAT({}, {}, ' ', {}, ' ', {})".format(
+        pcol("dnuvoi"), pcol("dindic"), pcol("cconvo"), pcol("dvoilib")
+    )
+
+    nom = (
+        "CASE WHEN {dqualp} IS NOT NULL "
+        "THEN CONCAT({dqualp}, ' ', {dnomus}, ' ', {dprnus}) "
+        "ELSE CONCAT({dformjur}, ' ', {ddenom}) END"
+    ).format(
+        dqualp=prcol("dqualp"),
+        dnomus=prcol("dnomus"),
+        dprnus=prcol("dprnus"),
+        dformjur=prcol("dformjur"),
+        ddenom=prcol("ddenom"),
+    )
+
+    dlieunss = (
+        "CASE WHEN {dqualp} IS NOT NULL "
+        "THEN CONCAT(' né(e) le ', {jdatnss}, ' à ', {dldnss}) ELSE '' END"
+    ).format(dqualp=prcol("dqualp"), jdatnss=prcol("jdatnss"), dldnss=prcol("dldnss"))
+
+    siren = "CASE WHEN {dqualp} IS NULL THEN {dsiren} ELSE '' END".format(
+        dqualp=prcol("dqualp"), dsiren=prcol("dsiren")
+    )
+
+    adr = [prcol("adresse_ligne{}".format(i)) for i in range(1, 5)]
     # concat_ws ignore les valeurs NULL (contrairement à ||, qui rendrait
     # toute la concaténation NULL dès qu'une ligne d'adresse est vide).
-    adresse_lignes = [
-        "NULLIF(trim(coalesce({}, '')), '')".format(
-            col("prop", pr, "adresse_ligne{}".format(i))
-        )
-        for i in range(1, 5)
-    ]
-    adresse_complete = "concat_ws(E'\\n', {})".format(", ".join(adresse_lignes))
+    adresse_complete = "concat_ws(E'\\n', {})".format(", ".join(adr))
+
+    gpa_col = quote_ident(cm.GPA_JOIN_COLUMN)
+
+    group_by = ", ".join(
+        [
+            pcol("idpar"),
+            pcol("idprocpte"),
+            pcol("idcom"),
+            pcol("idcomtxt"),
+            pcol("ccosec"),
+            pcol("dnupla"),
+            prcol("ccodrotxt"),
+            pcol("datmut"),
+            pcol("dnuvoi"),
+            pcol("dindic"),
+            pcol("cconvo"),
+            pcol("dvoilib"),
+            pcol("natpar"),
+            pcol("surfpar"),
+            prcol("ccogrmtxt"),
+            prcol("ccogrm"),
+            prcol("dqualp"),
+            prcol("dnomus"),
+            prcol("dprnus"),
+            prcol("dformjur"),
+            prcol("ddenom"),
+            prcol("jdatnss"),
+            prcol("dldnss"),
+            prcol("dsiren"),
+        ]
+        + adr
+        + ["gpa.{}".format(gpa_col)]
+    )
 
     return """
 DROP TABLE IF EXISTS {etat};
@@ -110,34 +181,36 @@ CREATE TABLE {etat} AS
 SELECT
     row_number() OVER () AS etat_id,
     {year} AS annee_ff,
-    {c_idprocpte} AS idprocpte,
+    {p_idprocpte} AS idprocpte,
     {p_idpar} AS idpar,
     {p_idcom} AS idcom,
     {p_idcomtxt} AS idcomtxt,
     {p_ccosec} AS ccosec,
     {p_dnupla} AS dnupla,
-    {s_ccodrotxt} AS ccodrotxt,
-    {s_datmut} AS datmut,
-    {s_lieudit} AS lieudit,
-    {s_natpar} AS natpar,
+    {pr_ccodrotxt} AS ccodrotxt,
+    {p_datmut} AS datmut,
+    {lieudit} AS lieudit,
+    {p_natpar} AS natpar,
     {p_surfpar} AS surfpar,
-    {s_ccogrmtxt} AS ccogrmtxt,
-    {s_ccogrm} AS ccogrm,
-    {s_sumsuba} AS sumsuba,
-    {c_nom} AS nom,
-    {c_dlieunss} AS dlieunss,
-    {c_siren} AS siren,
-    {c_adr1} AS adresse_ligne1,
-    {c_adr2} AS adresse_ligne2,
-    {c_adr3} AS adresse_ligne3,
-    {c_adr4} AS adresse_ligne4,
+    {pr_ccogrmtxt} AS ccogrmtxt,
+    {pr_ccogrm} AS ccogrm,
+    SUM({s_drcsuba}) AS sumsuba,
+    {nom} AS nom,
+    {dlieunss} AS dlieunss,
+    {siren} AS siren,
+    {adr1} AS adresse_ligne1,
+    {adr2} AS adresse_ligne2,
+    {adr3} AS adresse_ligne3,
+    {adr4} AS adresse_ligne4,
     {adresse_complete} AS adresse_complete,
     CASE WHEN gpa.{gpa_col} IS NOT NULL THEN 'oui' ELSE 'non' END AS gpa
 FROM {staging} data
 JOIN {ref_parcelle} parc ON {p_idpar} = data.id
-LEFT JOIN {ref_suf} suf ON {s_idpar} = {p_idpar}
-LEFT JOIN {ref_proprietaire} prop ON {c_idprocpte} = {p_idprocpte}
-LEFT JOIN {ref_gpa} gpa ON gpa.{gpa_col} = {p_idpar};
+JOIN {ref_suf} pnb21 ON {s_idpar} = {p_idpar}
+JOIN {ref_proprietaire} proprio ON {p_idprocpte} = {pr_idprocpte}
+LEFT JOIN {ref_gpa} gpa ON gpa.{gpa_col} = {p_idpar}
+GROUP BY {group_by}
+ORDER BY {p_idprocpte}, {p_idcom}, {p_ccosec}, {p_dnupla};
 
 ALTER TABLE {etat} ADD PRIMARY KEY (etat_id);
 CREATE INDEX ON {etat} (idpar);
@@ -149,31 +222,32 @@ CREATE INDEX ON {etat} (idpar);
         ref_suf=refs["suf"],
         ref_proprietaire=refs["proprietaire"],
         ref_gpa=refs["gpa"],
-        gpa_col=quote_ident(cm.GPA_JOIN_COLUMN),
-        p_idpar=col("parc", p, "idpar"),
-        p_idprocpte=col("parc", p, "idprocpte"),
-        p_idcom=col("parc", p, "idcom"),
-        p_idcomtxt=col("parc", p, "idcomtxt"),
-        p_ccosec=col("parc", p, "ccosec"),
-        p_dnupla=col("parc", p, "dnupla"),
-        p_surfpar=col("parc", p, "surfpar"),
-        s_idpar=col("suf", s, "idpar"),
-        s_ccodrotxt=col("suf", s, "ccodrotxt"),
-        s_datmut=col("suf", s, "datmut"),
-        s_lieudit=col("suf", s, "lieudit"),
-        s_natpar=col("suf", s, "natpar"),
-        s_ccogrm=col("suf", s, "ccogrm"),
-        s_ccogrmtxt=col("suf", s, "ccogrmtxt"),
-        s_sumsuba=col("suf", s, "sumsuba"),
-        c_idprocpte=col("prop", pr, "idprocpte"),
-        c_nom=col("prop", pr, "nom"),
-        c_dlieunss=col("prop", pr, "dlieunss"),
-        c_siren=col("prop", pr, "siren"),
-        c_adr1=col("prop", pr, "adresse_ligne1"),
-        c_adr2=col("prop", pr, "adresse_ligne2"),
-        c_adr3=col("prop", pr, "adresse_ligne3"),
-        c_adr4=col("prop", pr, "adresse_ligne4"),
+        gpa_col=gpa_col,
+        p_idpar=pcol("idpar"),
+        p_idprocpte=pcol("idprocpte"),
+        p_idcom=pcol("idcom"),
+        p_idcomtxt=pcol("idcomtxt"),
+        p_ccosec=pcol("ccosec"),
+        p_dnupla=pcol("dnupla"),
+        p_datmut=pcol("datmut"),
+        p_natpar=pcol("natpar"),
+        p_surfpar=pcol("surfpar"),
+        pr_ccodrotxt=prcol("ccodrotxt"),
+        pr_ccogrmtxt=prcol("ccogrmtxt"),
+        pr_ccogrm=prcol("ccogrm"),
+        pr_idprocpte=prcol("idprocpte"),
+        s_idpar=scol("idpar"),
+        s_drcsuba=scol("drcsuba"),
+        lieudit=lieudit,
+        nom=nom,
+        dlieunss=dlieunss,
+        siren=siren,
+        adr1=adr[0],
+        adr2=adr[1],
+        adr3=adr[2],
+        adr4=adr[3],
         adresse_complete=adresse_complete,
+        group_by=group_by,
     )
 
 
