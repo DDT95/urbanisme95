@@ -112,6 +112,53 @@ class TestReadCsvRows(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_two_column_format_commune_numero_combined(self):
+        # Format réel attendu par les utilisateurs : seulement commune +
+        # numéro de parcelle (section et numéro accolés, ex. "A327").
+        path = _write_csv(
+            [
+                {"commune": "95510", "numero": "A327"},
+                {"commune": "95510", "numero": "AA28"},
+                {"commune": "95510", "numero": "A 328"},
+            ],
+            ["commune", "numero"],
+        )
+        try:
+            rows = read_csv_rows(path)
+            self.assertEqual(len(rows), 3)
+            self.assertEqual(rows[0]["id"], "955100000A0327")
+            self.assertEqual(rows[0]["section"], "A")
+            self.assertEqual(rows[0]["numero"], "327")
+            self.assertEqual(rows[1]["id"], "95510000AA0028")
+            self.assertEqual(rows[2]["id"], "955100000A0328")
+        finally:
+            os.remove(path)
+
+    def test_two_column_format_numero_alias_headers(self):
+        for header in ("parcelle", "numero_parcelle", "num_parcelle"):
+            path = _write_csv(
+                [{"commune": "95510", header: "A327"}],
+                ["commune", header],
+            )
+            try:
+                rows = read_csv_rows(path)
+                self.assertEqual(len(rows), 1, "en-tête {!r}".format(header))
+                self.assertEqual(rows[0]["id"], "955100000A0327")
+            finally:
+                os.remove(path)
+
+    def test_unreadable_combined_numero_raises(self):
+        path = _write_csv(
+            [{"commune": "95510", "numero": "327"}],  # pas de section
+            ["commune", "numero"],
+        )
+        try:
+            with self.assertRaises(CsvFormatError) as ctx:
+                read_csv_rows(path)
+            self.assertIn("Ligne 2", str(ctx.exception))
+        finally:
+            os.remove(path)
+
     def test_invalid_numero_raises_with_line_number(self):
         path = _write_csv(
             [{"commune": "95510", "section": "A", "numero": "12A"}],

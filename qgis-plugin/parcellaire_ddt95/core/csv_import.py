@@ -14,9 +14,12 @@ silencieux de QGIS à cette étape.
 IMPORTANT : l'idpar utilisé pour la jointure avec le référentiel n'est
 JAMAIS pris tel quel dans une éventuelle colonne 'id' du CSV (souvent
 absente, ou héritée d'un ancien export qui ne correspond plus au
-millésime courant — c'est ce qui provoquait des parcelles "manquantes"
-alors que le format semblait correct). Il est reconstruit à chaque fois
-à partir de commune/préfixe/section/numéro via core.idpar.build_idpar().
+millésime courant). Il est reconstruit à chaque fois via
+core.idpar.build_idpar(). En usage réel, les utilisateurs ne fournissent
+souvent que deux colonnes : le code INSEE de la commune, et le numéro de
+parcelle sous sa forme usuelle (ex. "A327", section et numéro
+accolés) — ce format à 2 colonnes est donc pris en charge directement,
+en plus des CSV à colonnes section/numero séparées.
 """
 
 import csv
@@ -29,11 +32,29 @@ REQUIRED_FIELDS = ("commune", "section", "numero")
 OPTIONAL_FIELDS = ("id", "prefixe", "contenance", "created", "updated", "layer")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
-# Certains exports contiennent "section" et "numero" fusionnés dans une
+# En-têtes acceptés pour une colonne "section"+"numero" fusionnée en une
 # seule colonne, séparés par un espace (ex. en-tête "section numero" sans
-# virgule, valeur "A 327") — pris en charge en repli si les deux colonnes
-# séparées n'existent pas.
-_COMBINED_SECTION_NUMERO_ALIASES = {"sectionnumero", "numerosection"}
+# virgule -> une seule colonne CSV, valeur "A 327").
+_COMBINED_HEADER_ALIASES = {"sectionnumero", "numerosection"}
+
+# En-têtes acceptés pour une colonne "numéro de parcelle" qui contient à
+# elle seule la référence complète section+numéro (ex. "A327"), quand il
+# n'y a ni colonne "section" séparée ni en-tête combiné explicite.
+_NUMERO_COLUMN_ALIASES = {
+    "numero",
+    "numeroparcelle",
+    "parcelle",
+    "numparcelle",
+    "numparc",
+    "referenceparcelle",
+    "refparcelle",
+    "referencecadastrale",
+    "refcadastrale",
+}
+
+# Lettre(s) de section (1 ou 2, avec un éventuel "0" de bourrage devant)
+# suivies du numéro, avec ou sans séparateur entre les deux.
+_COMBINED_REFERENCE_RE = re.compile(r"^0?([A-Za-z]{1,2})[\s\-/_.]*?(\d+)$")
 
 # Nombre de lignes par instruction INSERT (évite une requête unique
 # démesurée sur un très gros CSV, sans multiplier les allers-retours réseau).
@@ -48,62 +69,118 @@ def _normalize_header(name):
     return re.sub(r"[\s_]+", "", name).strip().lower()
 
 
+def _split_combined_reference(value):
+    """Découpe une référence cadastrale combinée ('A327', 'A 327',
+    'AA0028'...) en (section, numero). Renvoie (None, None) si la valeur
+    ne peut pas être décomposée (ex. vide, ou sans lettre de section)."""
+    value = (value or "").strip()
+    if not value:
+        return "", ""
+    match = _COMBINED_REFERENCE_RE.match(value)
+    if not match:
+        return None, None
+    return match.group(1).upper(), match.group(2)
+
+
 def read_csv_rows(path, encoding="utf-8-sig"):
     """Lit le CSV et renvoie une liste de dict avec les colonnes ALL_FIELDS.
     La colonne 'id' du résultat est toujours reconstruite à partir de
     commune/préfixe/section/numéro (une éventuelle colonne 'id' du CSV
-    source est ignorée). Ignore les lignes sans commune/section/numéro.
-    Lève CsvFormatError si le fichier est vide, si des colonnes
-    obligatoires manquent, ou si un idpar ne peut pas être construit."""
+    source est ignorée). Accepte indifféremment : des colonnes 'section'
+    et 'numero' séparées, une colonne combinée ('section numero' -> 'A
+    327'), ou une simple colonne 'numero' (ou alias : parcelle,
+    numero_parcelle...) contenant la référence complète ('A327'). Ignore
+    les lignes incomplètes. Lève CsvFormatError si le fichier est vide,
+    si des colonnes obligatoires manquent, ou si un idpar ne peut pas
+    être construit."""
     with open(path, newline="", encoding=encoding) as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames
         if fieldnames is None:
             raise CsvFormatError("Le fichier CSV est vide.")
 
-        combined_field = None
-        if "section" not in fieldnames or "numero" not in fieldnames:
-            normalized = {_normalize_header(f): f for f in fieldnames}
-            for alias in _COMBINED_SECTION_NUMERO_ALIASES:
+        normalized = {_normalize_header(name): name for name in fieldnames}
+        has_section_col = "section" in fieldnames
+        has_numero_col = "numero" in fieldnames
+
+        combined_header = None
+        if not (has_section_col and has_numero_col):
+            for alias in _COMBINED_HEADER_ALIASES:
                 if alias in normalized:
-                    combined_field = normalized[alias]
+                    combined_header = normalized[alias]
                     break
 
-        missing = [
-            c
-            for c in REQUIRED_FIELDS
-            if c not in fieldnames and not (c in ("section", "numero") and combined_field)
-        ]
-        if missing:
+        combined_numero_source = None
+        if not has_section_col and combined_header is None:
+            for alias in _NUMERO_COLUMN_ALIASES:
+                if alias in normalized:
+                    combined_numero_source = normalized[alias]
+                    break
+
+        if "commune" not in fieldnames:
+            raise CsvFormatError("Colonne manquante dans le CSV : commune")
+        if not (
+            (has_section_col and has_numero_col)
+            or combined_header is not None
+            or combined_numero_source is not None
+        ):
             raise CsvFormatError(
-                "Colonnes manquantes dans le CSV : " + ", ".join(missing)
+                "Colonnes manquantes dans le CSV : il faut au minimum "
+                "'commune' et 'numero' (le numéro de parcelle peut inclure "
+                "la section, ex. 'A327')."
             )
 
         rows = []
         for line_no, raw_row in enumerate(reader, start=2):  # 1 = en-tête
-            row = {
-                field: (raw_row.get(field) or "").strip()
-                for field in ALL_FIELDS
-                if field not in ("section", "numero") or not combined_field
-            }
-            if combined_field:
-                parts = (raw_row.get(combined_field) or "").split(None, 1)
-                row["section"] = parts[0] if parts else ""
-                row["numero"] = parts[1].strip() if len(parts) > 1 else ""
+            commune = (raw_row.get("commune") or "").strip()
 
-            if not (row.get("commune") and row.get("section") and row.get("numero")):
+            if has_section_col and has_numero_col:
+                section = (raw_row.get("section") or "").strip()
+                numero = (raw_row.get("numero") or "").strip()
+            elif combined_header is not None:
+                parts = (raw_row.get(combined_header) or "").split(None, 1)
+                section = parts[0] if parts else ""
+                numero = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                raw_value = raw_row.get(combined_numero_source) or ""
+                section, numero = _split_combined_reference(raw_value)
+                if section is None:
+                    raise CsvFormatError(
+                        "Ligne {} du CSV : numéro de parcelle {!r} illisible "
+                        "(format attendu : lettre(s) de section suivie(s) du "
+                        "numéro, ex. « A327 » ou « A 327 »).".format(
+                            line_no, raw_value.strip()
+                        )
+                    )
+
+            if not (commune and section and numero):
                 continue
+
             try:
-                row["id"] = build_idpar(
-                    row["commune"], row.get("prefixe", ""), row["section"], row["numero"]
+                idpar = build_idpar(
+                    commune, (raw_row.get("prefixe") or "").strip(), section, numero
                 )
             except IdparFormatError as exc:
                 raise CsvFormatError("Ligne {} du CSV : {}".format(line_no, exc)) from exc
-            rows.append(row)
+
+            rows.append(
+                {
+                    "id": idpar,
+                    "commune": commune,
+                    "prefixe": (raw_row.get("prefixe") or "").strip(),
+                    "section": section,
+                    "numero": numero,
+                    "contenance": (raw_row.get("contenance") or "").strip(),
+                    "created": (raw_row.get("created") or "").strip(),
+                    "updated": (raw_row.get("updated") or "").strip(),
+                    "layer": (raw_row.get("layer") or "").strip(),
+                }
+            )
 
     if not rows:
         raise CsvFormatError(
-            "Aucune ligne exploitable (commune/section/numéro) n'a été trouvée."
+            "Aucune ligne exploitable (commune / numéro de parcelle) n'a "
+            "été trouvée."
         )
     return rows
 

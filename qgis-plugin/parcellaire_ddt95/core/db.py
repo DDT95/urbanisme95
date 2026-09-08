@@ -6,13 +6,7 @@ configuré par son nom, et QGIS se charge de l'authentification (gestionnaire
 d'authentification QGIS / mot de passe demandé à la volée si besoin).
 """
 
-from qgis.core import QgsDataSourceUri, QgsProviderRegistry
-
-# Délai maximal (secondes) pour établir la connexion PostgreSQL. Sans cela,
-# une base injoignable (mauvais réseau, VPN coupé, pare-feu qui ignore les
-# paquets) fait attendre QGIS indéfiniment sans le moindre message, ce qui
-# ressemble à un gel de l'application.
-CONNECT_TIMEOUT_SECONDS = 15
+from qgis.core import QgsProviderRegistry
 
 
 class DbError(Exception):
@@ -34,36 +28,27 @@ def list_postgres_connections():
     return sorted(_postgres_metadata().connections().keys())
 
 
-def _with_connect_timeout(uri_string):
-    uri = QgsDataSourceUri(uri_string)
-    uri.setParam("connect_timeout", str(CONNECT_TIMEOUT_SECONDS))
-    return uri.uri(False)
-
-
 class PgConnection:
-    """Enveloppe une connexion PostgreSQL déjà enregistrée dans QGIS."""
+    """Enveloppe une connexion PostgreSQL déjà enregistrée dans QGIS.
+
+    Utilise directement l'objet de connexion tel que géré par QGIS
+    (metadata.findConnection), sans le reconstruire à partir de son URI :
+    une reconstruction perd les réglages qui ne sont pas représentables
+    dans une simple chaîne de connexion (authcfg, SSL, service PostgreSQL...),
+    ce qui empêchait certaines connexions de production de fonctionner
+    alors qu'une connexion simple (sans ces réglages) fonctionnait."""
 
     def __init__(self, connection_name):
         self.connection_name = connection_name
-        metadata = _postgres_metadata()
-        stored = metadata.findConnection(connection_name)
-        if stored is None:
+        self._conn = _postgres_metadata().findConnection(connection_name)
+        if self._conn is None:
             raise DbError(
                 "La connexion PostgreSQL « {} » n'existe pas ou n'est pas "
                 "enregistrée dans QGIS.".format(connection_name)
             )
-        self._timeout_uri = _with_connect_timeout(stored.uri())
-        try:
-            self._conn = metadata.createConnection(self._timeout_uri, {})
-        except Exception:
-            # Repli sur la connexion enregistrée si la reconstruction avec
-            # délai d'expiration échoue pour une raison quelconque.
-            self._conn = stored
 
     def uri(self):
-        """URI de connexion (avec connect_timeout) utilisée pour construire
-        les couches QGIS (import CSV, chargement des résultats)."""
-        return self._timeout_uri
+        return self._conn.uri()
 
     def execute(self, sql):
         try:
@@ -97,11 +82,9 @@ def _friendly_message(exc, connection_name):
     if "timeout" in lowered or "timed out" in lowered or "could not connect" in lowered:
         return (
             "Impossible de joindre le serveur PostgreSQL de la connexion "
-            "« {} » (délai de {} s dépassé). Vérifiez que ce poste peut "
-            "atteindre ce serveur sur le réseau (VPN, même réseau local...) "
-            "avant de réessayer.\nDétail : {}".format(
-                connection_name, CONNECT_TIMEOUT_SECONDS, text
-            )
+            "« {} ». Vérifiez que ce poste peut atteindre ce serveur sur le "
+            "réseau (VPN, même réseau local...) avant de réessayer.\n"
+            "Détail : {}".format(connection_name, text)
         )
     return text
 
