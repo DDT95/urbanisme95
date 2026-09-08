@@ -6,7 +6,13 @@ configuré par son nom, et QGIS se charge de l'authentification (gestionnaire
 d'authentification QGIS / mot de passe demandé à la volée si besoin).
 """
 
-from qgis.core import QgsProviderRegistry
+from qgis.core import QgsDataSourceUri, QgsProviderRegistry
+
+# Délai maximal (secondes) pour établir la connexion PostgreSQL. Sans cela,
+# une base injoignable (mauvais réseau, VPN coupé, pare-feu qui ignore les
+# paquets) fait attendre QGIS indéfiniment sans le moindre message, ce qui
+# ressemble à un gel de l'application.
+CONNECT_TIMEOUT_SECONDS = 15
 
 
 class DbError(Exception):
@@ -28,32 +34,48 @@ def list_postgres_connections():
     return sorted(_postgres_metadata().connections().keys())
 
 
+def _with_connect_timeout(uri_string):
+    uri = QgsDataSourceUri(uri_string)
+    uri.setParam("connect_timeout", str(CONNECT_TIMEOUT_SECONDS))
+    return uri.uri(False)
+
+
 class PgConnection:
     """Enveloppe une connexion PostgreSQL déjà enregistrée dans QGIS."""
 
     def __init__(self, connection_name):
         self.connection_name = connection_name
-        self._conn = _postgres_metadata().findConnection(connection_name)
-        if self._conn is None:
+        metadata = _postgres_metadata()
+        stored = metadata.findConnection(connection_name)
+        if stored is None:
             raise DbError(
                 "La connexion PostgreSQL « {} » n'existe pas ou n'est pas "
                 "enregistrée dans QGIS.".format(connection_name)
             )
+        self._timeout_uri = _with_connect_timeout(stored.uri())
+        try:
+            self._conn = metadata.createConnection(self._timeout_uri, {})
+        except Exception:
+            # Repli sur la connexion enregistrée si la reconstruction avec
+            # délai d'expiration échoue pour une raison quelconque.
+            self._conn = stored
 
     def uri(self):
-        return self._conn.uri()
+        """URI de connexion (avec connect_timeout) utilisée pour construire
+        les couches QGIS (import CSV, chargement des résultats)."""
+        return self._timeout_uri
 
     def execute(self, sql):
         try:
             return self._conn.executeSql(sql)
         except Exception as exc:
-            raise DbError(str(exc)) from exc
+            raise DbError(_friendly_message(exc, self.connection_name)) from exc
 
     def table_exists(self, schema, table):
         try:
             tables = self._conn.tables(schema)
         except Exception as exc:
-            raise DbError(str(exc)) from exc
+            raise DbError(_friendly_message(exc, self.connection_name)) from exc
         return any(t.tableName() == table for t in tables)
 
     def begin(self):
@@ -67,6 +89,21 @@ class PgConnection:
 
     def transaction(self):
         return _Transaction(self)
+
+
+def _friendly_message(exc, connection_name):
+    text = str(exc)
+    lowered = text.lower()
+    if "timeout" in lowered or "timed out" in lowered or "could not connect" in lowered:
+        return (
+            "Impossible de joindre le serveur PostgreSQL de la connexion "
+            "« {} » (délai de {} s dépassé). Vérifiez que ce poste peut "
+            "atteindre ce serveur sur le réseau (VPN, même réseau local...) "
+            "avant de réessayer.\nDétail : {}".format(
+                connection_name, CONNECT_TIMEOUT_SECONDS, text
+            )
+        )
+    return text
 
 
 class _Transaction:
