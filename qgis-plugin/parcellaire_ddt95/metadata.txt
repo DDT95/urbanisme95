@@ -10,6 +10,6 @@ tracker=
 repository=
 category=Database
 tags=cadastre,parcellaire,postgresql,fichiers fonciers,ddt
-experimental=True
+experimental=False
 deprecated=False
 hasProcessingProvider=no
