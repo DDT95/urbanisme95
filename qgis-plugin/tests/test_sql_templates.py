@@ -17,6 +17,14 @@ class TestSqlTemplates(unittest.TestCase):
         with self.assertRaises(InvalidIdentifierError):
             tpl.create_etat_parcellaire_sql("q_26_01_4825", "wk'; DROP TABLE etat_p_wk; --", 2024)
 
+    def test_create_schema_sql_is_idempotent_and_quoted(self):
+        sql = tpl.create_schema_sql("q_21_06_4825")
+        self.assertEqual(sql, 'CREATE SCHEMA IF NOT EXISTS "q_21_06_4825";')
+
+    def test_create_schema_sql_rejects_malicious_schema(self):
+        with self.assertRaises(InvalidIdentifierError):
+            tpl.create_schema_sql("q_26; DROP SCHEMA public CASCADE; --")
+
     def test_staging_table_sql_contains_quoted_identifiers(self):
         sql = tpl.create_staging_table_sql("q_26_01_4825", "wk")
         self.assertIn('"q_26_01_4825"."data_parcelle_wk"', sql)

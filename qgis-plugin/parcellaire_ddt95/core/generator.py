@@ -22,7 +22,10 @@ class GenerationResult:
 
 def existing_result_tables(connection_name, schema, commande):
     """Renvoie la liste des tables de résultat qui existent déjà pour cette
-    commande (pour demander confirmation avant de les écraser)."""
+    commande (pour demander confirmation avant de les écraser). Le schéma
+    n'a pas besoin d'exister au préalable (generate() le crée si besoin) :
+    s'il n'existe pas encore, il n'y a par définition aucune table à
+    écraser."""
     validate_identifier(schema, "schéma")
     validate_identifier(commande, "commande")
     conn = PgConnection(connection_name)
@@ -31,7 +34,10 @@ def existing_result_tables(connection_name, schema, commande):
         tpl.plan_table_name(commande),
         tpl.comparaison_table_name(commande),
     ]
-    return [name for name in candidates if conn.table_exists(schema, name)]
+    try:
+        return [name for name in candidates if conn.table_exists(schema, name)]
+    except DbError:
+        return []
 
 
 def generate(connection_name, schema, commande, millesime, csv_path, progress=None):
@@ -57,6 +63,9 @@ def generate(connection_name, schema, commande, millesime, csv_path, progress=No
     conn = PgConnection(connection_name)
 
     with conn.transaction():
+        log("Vérification/création du schéma « {} »...".format(schema))
+        conn.execute(tpl.create_schema_sql(schema))
+
         log("Création de la table de staging...")
         conn.execute(tpl.create_staging_table_sql(schema, commande))
 

@@ -106,6 +106,13 @@ def create_vues_courantes_sql(schema, commande):
     )
 
 
+def create_schema_sql(schema):
+    """Crée le schéma de travail s'il n'existe pas déjà. Aucun schéma
+    préexistant n'est requis : n'importe quel nom valide peut être saisi."""
+    validate_identifier(schema, "schéma")
+    return "CREATE SCHEMA IF NOT EXISTS {};".format(quote_ident(schema))
+
+
 def create_staging_table_sql(schema, commande):
     _check(schema, commande)
     table = qualified_table(schema, staging_table_name(commande))
