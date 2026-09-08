@@ -94,6 +94,9 @@ class ParcellaireDialog(QDialog):
         if not names:
             self._log("Aucune connexion PostgreSQL enregistrée dans QGIS.")
         self.connection_combo.addItems(names)
+        pg_index = self.connection_combo.findText("PG")
+        if pg_index >= 0:
+            self.connection_combo.setCurrentIndex(pg_index)
 
     def _choose_csv(self):
         path, _ = QFileDialog.getOpenFileName(
