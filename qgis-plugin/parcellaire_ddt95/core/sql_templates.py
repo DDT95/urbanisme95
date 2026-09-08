@@ -61,9 +61,49 @@ def comparaison_table_name(commande):
     return "comparaison_parcelles_{}".format(commande)
 
 
+# Vues stables, toujours au même nom quelle que soit la commande. Le projet
+# QGIS (couche virtuelle atlas_com, filtre d'atlas de plans_parcellaire)
+# les référence une fois pour toutes ; le plugin les repointe vers les
+# tables de la commande courante à chaque génération, si bien qu'aucune
+# mise en page ni couche virtuelle n'a jamais besoin d'être retouchée.
+ETAT_VUE_COURANTE = "etat_p_courant"
+PLAN_VUE_COURANTE = "plans_parcellaire_courant"
+COMPARAISON_VUE_COURANTE = "comparaison_parcelles_courant"
+
+
 def _check(schema, commande):
     validate_identifier(schema, "schéma")
     validate_identifier(commande, "commande")
+
+
+def create_vues_courantes_sql(schema, commande):
+    """(Re)crée les 3 vues à nom fixe pointant vers les tables de la
+    commande courante. CREATE OR REPLACE VIEW échoue si la liste de
+    colonnes change de façon incompatible (rare ici, tables recréées à
+    l'identique à chaque fois) : le message d'erreur PostgreSQL reste
+    clair dans ce cas."""
+    _check(schema, commande)
+    etat = qualified_table(schema, etat_table_name(commande))
+    plan = qualified_table(schema, plan_table_name(commande))
+    comparaison = qualified_table(schema, comparaison_table_name(commande))
+    etat_vue = qualified_table(schema, ETAT_VUE_COURANTE)
+    plan_vue = qualified_table(schema, PLAN_VUE_COURANTE)
+    comparaison_vue = qualified_table(schema, COMPARAISON_VUE_COURANTE)
+    return (
+        "DROP VIEW IF EXISTS {etat_vue} CASCADE;\n"
+        "CREATE VIEW {etat_vue} AS SELECT * FROM {etat};\n"
+        "DROP VIEW IF EXISTS {plan_vue} CASCADE;\n"
+        "CREATE VIEW {plan_vue} AS SELECT * FROM {plan};\n"
+        "DROP VIEW IF EXISTS {comparaison_vue} CASCADE;\n"
+        "CREATE VIEW {comparaison_vue} AS SELECT * FROM {comparaison};"
+    ).format(
+        etat_vue=etat_vue,
+        etat=etat,
+        plan_vue=plan_vue,
+        plan=plan,
+        comparaison_vue=comparaison_vue,
+        comparaison=comparaison,
+    )
 
 
 def create_staging_table_sql(schema, commande):

@@ -32,7 +32,11 @@ def _make_layer(base_uri, schema, table, key_column, geometry_column=""):
 
 
 def load_results(pg_connection, schema, commande, project=None):
-    """Charge (ou recharge) les trois résultats sous leurs noms fixes.
+    """Charge (ou recharge) les trois résultats sous leurs noms fixes, à
+    partir des vues stables (tpl.ETAT_VUE_COURANTE, etc.) que generate()
+    vient de repointer vers la commande courante — pas des tables
+    suffixées par la commande, pour que ces couches restent stables même
+    si generator.create_vues_courantes_sql() change un jour de stratégie.
     L'état parcellaire est chargé sans géométrie (table attributaire),
     le plan est chargé comme couche polygonale : aucune manipulation des
     propriétés de la connexion PostgreSQL n'est nécessaire côté utilisateur."""
@@ -40,20 +44,18 @@ def load_results(pg_connection, schema, commande, project=None):
     base_uri = pg_connection.uri()
 
     layers = {
-        "etat": _make_layer(
-            base_uri, schema, tpl.etat_table_name(commande), "etat_id"
-        ),
+        "etat": _make_layer(base_uri, schema, tpl.ETAT_VUE_COURANTE, "etat_id"),
         "plan": _make_layer(
             base_uri,
             schema,
-            tpl.plan_table_name(commande),
+            tpl.PLAN_VUE_COURANTE,
             "plan_id",
             geometry_column="geompar",
         ),
         "comparaison": _make_layer(
             base_uri,
             schema,
-            tpl.comparaison_table_name(commande),
+            tpl.COMPARAISON_VUE_COURANTE,
             "comparaison_id",
         ),
     }

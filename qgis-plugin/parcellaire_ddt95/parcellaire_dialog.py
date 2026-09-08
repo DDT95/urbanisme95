@@ -58,7 +58,6 @@ class ParcellaireDialog(QDialog):
         form.addRow("Schéma de travail", self.schema_edit)
 
         self.commande_edit = QLineEdit()
-        self.commande_edit.setPlaceholderText("wk")
         form.addRow("Nom court de la commande", self.commande_edit)
 
         self.millesime_spin = QSpinBox()

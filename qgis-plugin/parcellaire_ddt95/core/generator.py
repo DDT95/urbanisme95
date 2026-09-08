@@ -72,6 +72,9 @@ def generate(connection_name, schema, commande, millesime, csv_path, progress=No
         log("Construction de la comparaison...")
         conn.execute(tpl.create_comparaison_sql(schema, commande))
 
+        log("Mise à jour des vues courantes (utilisées par les mises en page)...")
+        conn.execute(tpl.create_vues_courantes_sql(schema, commande))
+
     _fill_bilan(conn, schema, commande, result)
     log(
         "Terminé : {} parcelle(s) au départ, {} ligne(s) d'état, "
