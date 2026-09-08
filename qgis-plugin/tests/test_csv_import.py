@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from parcellaire_ddt95.core.csv_import import CsvFormatError, read_csv_rows
+from parcellaire_ddt95.core.csv_import import CsvFormatError, insert_rows, read_csv_rows
 
 
 def _write_csv(rows, fieldnames):
@@ -100,6 +100,52 @@ class TestReadCsvRows(unittest.TestCase):
                 read_csv_rows(path)
         finally:
             os.remove(path)
+
+
+class _FakeConn:
+    """Simule core.db.PgConnection : accumule les instructions SQL passées
+    à execute(), sans dépendance QGIS, pour tester insert_rows() seule."""
+
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql):
+        self.statements.append(sql)
+
+
+class TestInsertRows(unittest.TestCase):
+    def test_uses_single_connection_no_separate_provider(self):
+        # insert_rows ne doit plus ouvrir de QgsVectorLayer/connexion
+        # séparée : tout passe par conn.execute() sur la connexion fournie
+        # (sinon : blocage si la table est encore verrouillée dans la
+        # transaction en cours sur l'autre connexion).
+        conn = _FakeConn()
+        rows = [{"id": "1", "commune": "95510", "prefixe": "", "section": "A",
+                 "numero": "1", "contenance": "100", "created": "", "updated": "", "layer": ""}]
+        total = insert_rows(conn, "q_26_01_4825", "data_parcelle_wk", rows)
+        self.assertEqual(total, 1)
+        self.assertEqual(len(conn.statements), 1)
+        self.assertIn('INSERT INTO "q_26_01_4825"."data_parcelle_wk"', conn.statements[0])
+
+    def test_escapes_single_quotes_in_values(self):
+        conn = _FakeConn()
+        rows = [{"id": "1", "commune": "95510", "prefixe": "", "section": "A",
+                 "numero": "1", "contenance": "100", "created": "note d'import",
+                 "updated": "", "layer": ""}]
+        insert_rows(conn, "q_26_01_4825", "data_parcelle_wk", rows)
+        self.assertIn("note d''import", conn.statements[0])
+        self.assertNotIn("note d'import'", conn.statements[0])
+
+    def test_batches_large_row_counts(self):
+        conn = _FakeConn()
+        rows = [
+            {"id": str(i), "commune": "95510", "prefixe": "", "section": "A",
+             "numero": str(i), "contenance": "100", "created": "", "updated": "", "layer": ""}
+            for i in range(1200)
+        ]
+        total = insert_rows(conn, "q_26_01_4825", "data_parcelle_wk", rows)
+        self.assertEqual(total, 1200)
+        self.assertEqual(len(conn.statements), 3)  # 500 + 500 + 200
 
 
 if __name__ == "__main__":

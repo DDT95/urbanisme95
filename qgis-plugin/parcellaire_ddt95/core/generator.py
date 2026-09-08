@@ -62,6 +62,7 @@ def generate(connection_name, schema, commande, millesime, csv_path, progress=No
 
         log("Import des identifiants dans PostgreSQL...")
         insert_rows(conn, schema, tpl.staging_table_name(commande), rows)
+        log("{} parcelle(s) importée(s) dans PostgreSQL.".format(len(rows)))
 
         log("Construction de l'état parcellaire...")
         conn.execute(tpl.create_etat_parcellaire_sql(schema, commande, millesime))

@@ -65,14 +65,6 @@ class ParcellaireDialog(QDialog):
         self.millesime_spin.setValue(2024)
         form.addRow("Millésime des fichiers fonciers", self.millesime_spin)
 
-        output_row = QHBoxLayout()
-        self.output_edit = QLineEdit()
-        output_btn = QPushButton("Parcourir...")
-        output_btn.clicked.connect(self._choose_output_dir)
-        output_row.addWidget(self.output_edit)
-        output_row.addWidget(output_btn)
-        form.addRow("Dossier de sortie des PDF", output_row)
-
         layout.addLayout(form)
 
         buttons_row = QHBoxLayout()
@@ -80,17 +72,10 @@ class ParcellaireDialog(QDialog):
         self.generate_btn.clicked.connect(self._on_generate)
         self.verify_btn = QPushButton("Vérifier")
         self.verify_btn.clicked.connect(self._on_verify)
-        self.export_btn = QPushButton("Exporter les PDF")
-        self.export_btn.setEnabled(False)
-        self.export_btn.setToolTip(
-            "À venir (Phase 4) : nécessite un projet QGIS avec les mises "
-            "en page atlas déjà en place."
-        )
         self.diagnose_btn = QPushButton("Diagnostiquer les tables sources")
         self.diagnose_btn.clicked.connect(self._on_diagnose)
         buttons_row.addWidget(self.generate_btn)
         buttons_row.addWidget(self.verify_btn)
-        buttons_row.addWidget(self.export_btn)
         buttons_row.addWidget(self.diagnose_btn)
         layout.addLayout(buttons_row)
 
@@ -116,13 +101,6 @@ class ParcellaireDialog(QDialog):
         )
         if path:
             self.csv_edit.setText(path)
-
-    def _choose_output_dir(self):
-        path = QFileDialog.getExistingDirectory(
-            self, "Choisir le dossier de sortie des PDF"
-        )
-        if path:
-            self.output_edit.setText(path)
 
     def _log(self, message):
         self.report.append(message)

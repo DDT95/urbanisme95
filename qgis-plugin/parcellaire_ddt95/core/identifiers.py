@@ -38,6 +38,16 @@ def qualified_table(schema, table):
     return "{}.{}".format(quote_ident(schema), quote_ident(table))
 
 
+def sql_string_literal(value):
+    """Échappe une valeur TEXTE (donnée, pas un identifiant) comme littéral
+    SQL sûr : guillemets simples doublés. Utilisé uniquement pour les
+    valeurs issues du CSV lors de l'import en base — jamais pour des noms
+    de table/colonne, qui passent par validate_identifier()/quote_ident()."""
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def validate_millesime(value):
     try:
         year = int(value)
