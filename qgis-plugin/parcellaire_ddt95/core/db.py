@@ -86,6 +86,14 @@ def _friendly_message(exc, connection_name):
             "réseau (VPN, même réseau local...) avant de réessayer.\n"
             "Détail : {}".format(connection_name, text)
         )
+    if "asgard" in lowered and "create schema" in lowered:
+        return (
+            "Le schéma demandé n'existe pas encore, et cette base utilise "
+            "Asgard pour gérer les schémas : il ne peut pas être créé "
+            "automatiquement par une simple requête. Faites créer ce "
+            "schéma via le mécanisme habituel (Asgard) avant de relancer, "
+            "ou utilisez un schéma déjà existant.\nDétail : {}".format(text)
+        )
     return text
 
 
