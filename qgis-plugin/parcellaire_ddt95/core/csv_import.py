@@ -10,14 +10,22 @@ principale tient encore un verrou sur la table de staging (créée dans la
 même transaction, pas encore validée) resterait bloquée indéfiniment en
 attente de ce verrou. C'est exactement ce qui provoquait un blocage
 silencieux de QGIS à cette étape.
+
+IMPORTANT : l'idpar utilisé pour la jointure avec le référentiel n'est
+JAMAIS pris tel quel dans une éventuelle colonne 'id' du CSV (souvent
+absente, ou héritée d'un ancien export qui ne correspond plus au
+millésime courant — c'est ce qui provoquait des parcelles "manquantes"
+alors que le format semblait correct). Il est reconstruit à chaque fois
+à partir de commune/préfixe/section/numéro via core.idpar.build_idpar().
 """
 
 import csv
 
 from .identifiers import qualified_table, sql_string_literal
+from .idpar import IdparFormatError, build_idpar
 
-REQUIRED_FIELDS = ("id", "commune", "prefixe", "section", "numero", "contenance")
-OPTIONAL_FIELDS = ("created", "updated", "layer")
+REQUIRED_FIELDS = ("commune", "section", "numero")
+OPTIONAL_FIELDS = ("id", "prefixe", "contenance", "created", "updated", "layer")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
 # Nombre de lignes par instruction INSERT (évite une requête unique
@@ -31,8 +39,11 @@ class CsvFormatError(ValueError):
 
 def read_csv_rows(path, encoding="utf-8-sig"):
     """Lit le CSV et renvoie une liste de dict avec les colonnes ALL_FIELDS.
-    Ignore les lignes sans identifiant 'id'. Lève CsvFormatError si le
-    fichier est vide ou si des colonnes obligatoires manquent."""
+    La colonne 'id' du résultat est toujours reconstruite à partir de
+    commune/préfixe/section/numéro (une éventuelle colonne 'id' du CSV
+    source est ignorée). Ignore les lignes sans commune/section/numéro.
+    Lève CsvFormatError si le fichier est vide, si des colonnes
+    obligatoires manquent, ou si un idpar ne peut pas être construit."""
     with open(path, newline="", encoding=encoding) as f:
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
@@ -43,13 +54,22 @@ def read_csv_rows(path, encoding="utf-8-sig"):
                 "Colonnes manquantes dans le CSV : " + ", ".join(missing)
             )
         rows = []
-        for raw_row in reader:
+        for line_no, raw_row in enumerate(reader, start=2):  # 1 = en-tête
             row = {field: (raw_row.get(field) or "").strip() for field in ALL_FIELDS}
-            if row["id"]:
-                rows.append(row)
+            if not (row["commune"] and row["section"] and row["numero"]):
+                continue
+            try:
+                row["id"] = build_idpar(
+                    row["commune"], row.get("prefixe", ""), row["section"], row["numero"]
+                )
+            except IdparFormatError as exc:
+                raise CsvFormatError("Ligne {} du CSV : {}".format(line_no, exc)) from exc
+            rows.append(row)
 
     if not rows:
-        raise CsvFormatError("Aucune ligne avec un identifiant 'id' n'a été trouvée.")
+        raise CsvFormatError(
+            "Aucune ligne exploitable (commune/section/numéro) n'a été trouvée."
+        )
     return rows
 
 

@@ -20,15 +20,18 @@ def _write_csv(rows, fieldnames):
 
 
 class TestReadCsvRows(unittest.TestCase):
-    def test_reads_valid_csv(self):
+    def test_reads_valid_csv_and_rebuilds_id(self):
+        # La colonne 'id' du CSV (ici volontairement fausse) doit être
+        # ignorée : l'id utilisé est toujours reconstruit depuis
+        # commune/prefixe/section/numero.
         path = _write_csv(
             [
                 {
-                    "id": "955100000A0327",
+                    "id": "CECI_EST_FAUX",
                     "commune": "95510",
                     "prefixe": "",
                     "section": "A",
-                    "numero": "0327",
+                    "numero": "327",
                     "contenance": "1200",
                 }
             ],
@@ -42,10 +45,23 @@ class TestReadCsvRows(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_works_without_id_or_prefixe_column(self):
+        # Cas réel attendu : le CSV ne contient que commune/section/numero.
+        path = _write_csv(
+            [{"commune": "95510", "section": "A", "numero": "1"}],
+            ["commune", "section", "numero"],
+        )
+        try:
+            rows = read_csv_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["id"], "955100000A0001")
+        finally:
+            os.remove(path)
+
     def test_missing_required_column_raises(self):
         path = _write_csv(
-            [{"id": "1", "commune": "95510"}],
-            ["id", "commune"],
+            [{"commune": "95510"}],
+            ["commune"],
         )
         try:
             with self.assertRaises(CsvFormatError):
@@ -53,27 +69,13 @@ class TestReadCsvRows(unittest.TestCase):
         finally:
             os.remove(path)
 
-    def test_empty_id_rows_are_skipped(self):
+    def test_incomplete_rows_are_skipped(self):
         path = _write_csv(
             [
-                {
-                    "id": "",
-                    "commune": "95510",
-                    "prefixe": "",
-                    "section": "A",
-                    "numero": "1",
-                    "contenance": "100",
-                },
-                {
-                    "id": "955100000A0001",
-                    "commune": "95510",
-                    "prefixe": "",
-                    "section": "A",
-                    "numero": "1",
-                    "contenance": "100",
-                },
+                {"commune": "95510", "section": "", "numero": "1"},
+                {"commune": "95510", "section": "A", "numero": "1"},
             ],
-            ["id", "commune", "prefixe", "section", "numero", "contenance"],
+            ["commune", "section", "numero"],
         )
         try:
             rows = read_csv_rows(path)
@@ -81,23 +83,26 @@ class TestReadCsvRows(unittest.TestCase):
         finally:
             os.remove(path)
 
-    def test_all_rows_empty_id_raises(self):
+    def test_all_rows_incomplete_raises(self):
         path = _write_csv(
-            [
-                {
-                    "id": "",
-                    "commune": "95510",
-                    "prefixe": "",
-                    "section": "A",
-                    "numero": "1",
-                    "contenance": "100",
-                }
-            ],
-            ["id", "commune", "prefixe", "section", "numero", "contenance"],
+            [{"commune": "95510", "section": "", "numero": "1"}],
+            ["commune", "section", "numero"],
         )
         try:
             with self.assertRaises(CsvFormatError):
                 read_csv_rows(path)
+        finally:
+            os.remove(path)
+
+    def test_invalid_numero_raises_with_line_number(self):
+        path = _write_csv(
+            [{"commune": "95510", "section": "A", "numero": "12A"}],
+            ["commune", "section", "numero"],
+        )
+        try:
+            with self.assertRaises(CsvFormatError) as ctx:
+                read_csv_rows(path)
+            self.assertIn("Ligne 2", str(ctx.exception))
         finally:
             os.remove(path)
 
