@@ -223,7 +223,7 @@ def create_etat_parcellaire_sql(schema, commande, millesime):
     )
 
     return """
-DROP TABLE IF EXISTS {etat};
+DROP TABLE IF EXISTS {etat} CASCADE;
 CREATE TABLE {etat} AS
 SELECT
     row_number() OVER () AS etat_id,
@@ -310,7 +310,7 @@ def create_plans_parcellaire_sql(schema, commande, millesime):
         return "{}.{}".format(alias, quote_ident(p[key]))
 
     return """
-DROP TABLE IF EXISTS {plan};
+DROP TABLE IF EXISTS {plan} CASCADE;
 CREATE TABLE {plan} AS
 SELECT DISTINCT
     row_number() OVER () AS plan_id,
@@ -351,7 +351,7 @@ def create_comparaison_sql(schema, commande):
     comparaison = qualified_table(schema, comparaison_table_name(commande))
 
     return """
-DROP TABLE IF EXISTS {comparaison};
+DROP TABLE IF EXISTS {comparaison} CASCADE;
 CREATE TABLE {comparaison} AS
 SELECT
     row_number() OVER () AS comparaison_id,

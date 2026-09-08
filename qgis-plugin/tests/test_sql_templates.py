@@ -54,6 +54,23 @@ class TestSqlTemplates(unittest.TestCase):
         self.assertIn("2154", sql)
         self.assertIn("PRIMARY KEY", sql)
 
+    def test_drop_statements_use_cascade(self):
+        # Une commande relancée une 2e fois doit pouvoir DROP/recréer les
+        # tables même si les vues _courant en dépendent déjà (créées par
+        # le run précédent) : sans CASCADE, PostgreSQL refuse le DROP.
+        self.assertIn(
+            "DROP TABLE IF EXISTS \"q_26_01_4825\".\"etat_p_wk\" CASCADE",
+            tpl.create_etat_parcellaire_sql("q_26_01_4825", "wk", 2024),
+        )
+        self.assertIn(
+            "DROP TABLE IF EXISTS \"q_26_01_4825\".\"plans_parcellaire_wk\" CASCADE",
+            tpl.create_plans_parcellaire_sql("q_26_01_4825", "wk", 2024),
+        )
+        self.assertIn(
+            "DROP TABLE IF EXISTS \"q_26_01_4825\".\"comparaison_parcelles_wk\" CASCADE",
+            tpl.create_comparaison_sql("q_26_01_4825", "wk"),
+        )
+
     def test_vues_courantes_point_to_commande_tables(self):
         sql = tpl.create_vues_courantes_sql("q_26_01_4825", "wk")
         self.assertIn('CREATE VIEW "q_26_01_4825"."etat_p_courant" AS SELECT * FROM "q_26_01_4825"."etat_p_wk"', sql)
