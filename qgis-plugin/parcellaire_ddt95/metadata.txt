@@ -1,0 +1,15 @@
+[general]
+name=Parcellaire DDT95
+qgisMinimumVersion=3.22
+description=Génère l'état parcellaire et le plan parcellaire à partir d'un CSV de parcelles et d'une base PostgreSQL Fichiers Fonciers.
+version=0.1.0
+author=DDT95
+email=koba.wilfried@gmail.com
+about=Automatise la création des tables etat_p_<commande>, plans_parcellaire_<commande> et comparaison_parcelles_<commande> à partir d'un fichier CSV de parcelles et d'une connexion PostgreSQL déjà enregistrée dans QGIS. Aucun mot de passe ni chemin local n'est stocké dans le plugin.
+tracker=
+repository=
+category=Database
+tags=cadastre,parcellaire,postgresql,fichiers fonciers,ddt
+experimental=True
+deprecated=False
+hasProcessingProvider=no
