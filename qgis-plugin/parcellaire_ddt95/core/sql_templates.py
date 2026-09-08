@@ -94,13 +94,15 @@ def create_etat_parcellaire_sql(schema, commande, millesime):
     def col(alias, mapping, key):
         return "{}.{}".format(alias, quote_ident(mapping[key]))
 
+    # concat_ws ignore les valeurs NULL (contrairement à ||, qui rendrait
+    # toute la concaténation NULL dès qu'une ligne d'adresse est vide).
     adresse_lignes = [
         "NULLIF(trim(coalesce({}, '')), '')".format(
             col("prop", pr, "adresse_ligne{}".format(i))
         )
         for i in range(1, 5)
     ]
-    adresse_complete = " || E'\\n' || ".join(adresse_lignes)
+    adresse_complete = "concat_ws(E'\\n', {})".format(", ".join(adresse_lignes))
 
     return """
 DROP TABLE IF EXISTS {etat};

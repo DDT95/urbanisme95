@@ -32,6 +32,13 @@ class TestSqlTemplates(unittest.TestCase):
         self.assertIn("annee_ff", sql)
         self.assertIn("2024 AS annee_ff", sql)
 
+    def test_adresse_complete_uses_concat_ws_not_plain_concat(self):
+        # concat_ws ignore les valeurs NULL ; avec ||, une seule ligne
+        # d'adresse vide (NULLIF -> NULL) rendrait toute l'adresse NULL.
+        sql = tpl.create_etat_parcellaire_sql("q_26_01_4825", "wk", 2024)
+        self.assertIn("concat_ws(E'\\n'", sql)
+        self.assertNotIn("'\\n' || NULLIF", sql)
+
     def test_plans_parcellaire_sql_has_gist_index_and_srid(self):
         sql = tpl.create_plans_parcellaire_sql("q_26_01_4825", "wk", 2024)
         self.assertIn('"q_26_01_4825"."plans_parcellaire_wk"', sql)
