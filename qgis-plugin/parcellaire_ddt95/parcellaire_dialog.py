@@ -23,6 +23,9 @@ from .core.layers import load_results
 
 MAX_ANOMALIES_AFFICHEES = 200
 
+# Schéma de travail unique : figé ici plutôt que saisi à chaque fois.
+SCHEMA_DE_TRAVAIL = "q_26_01_4825"
+
 
 class ParcellaireDialog(QDialog):
     def __init__(self, iface, parent=None):
@@ -53,12 +56,8 @@ class ParcellaireDialog(QDialog):
         conn_row.addWidget(refresh_btn)
         form.addRow("Connexion PostgreSQL", conn_row)
 
-        self.schema_edit = QLineEdit()
-        self.schema_edit.setPlaceholderText("q_26_01_4825")
-        form.addRow("Schéma de travail", self.schema_edit)
-
         self.commande_edit = QLineEdit()
-        form.addRow("Nom court de la commande", self.commande_edit)
+        form.addRow("Commande", self.commande_edit)
 
         self.millesime_spin = QSpinBox()
         self.millesime_spin.setRange(2000, 2100)
@@ -112,7 +111,7 @@ class ParcellaireDialog(QDialog):
     def _current_params(self):
         return dict(
             connection_name=self.connection_combo.currentText().strip(),
-            schema=self.schema_edit.text().strip(),
+            schema=SCHEMA_DE_TRAVAIL,
             commande=self.commande_edit.text().strip(),
             millesime=self.millesime_spin.value(),
             csv_path=self.csv_edit.text().strip(),
@@ -171,9 +170,10 @@ class ParcellaireDialog(QDialog):
 
         try:
             load_results(conn, params["schema"], params["commande"])
+            c = params["commande"]
             self._log(
-                "Couches ajoutées au projet : etat_parcellaire_courant, "
-                "plan_parcellaire_courant, comparaison_courante."
+                "Couches ajoutées au projet : etat_p_{c}, "
+                "plans_parcellaire_{c}, comparaison_parcelles_{c}.".format(c=c)
             )
         except Exception as exc:
             self._log("Avertissement : couches non ajoutées ({}).".format(exc))
