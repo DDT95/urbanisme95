@@ -112,7 +112,20 @@ class TestSqlTemplates(unittest.TestCase):
         # millésime non explicitement ajouté à REFERENTIELS_PAR_MILLESIME
         # doit échouer clairement plutôt que deviner un nom de table.
         with self.assertRaises(InvalidIdentifierError):
-            tpl.referentiels(2025)
+            tpl.referentiels(2019)
+
+    def test_referentiels_2025_matches_information_schema(self):
+        # Confirmé via information_schema.tables sur la base réelle : un
+        # seul schéma (pas de split dep/non_ano), tables suffixées par
+        # l'année plutôt que préfixées, pas de préfixe départemental.
+        refs = tpl.referentiels(2025)
+        self.assertEqual(refs["parcelle"], '"x_ff2025_non_ano"."fftp_pnb10_parcelle_2025"')
+        self.assertEqual(refs["suf"], '"x_ff2025_non_ano"."fftp_pnb21_suf_2025"')
+        self.assertEqual(
+            refs["proprietaire"],
+            '"x_ff2025_non_ano"."fftp_proprietaire_droit_non_ano_2025"',
+        )
+        self.assertEqual(refs["gpa"], '"r_drieat"."gpa_annexe_1"')
 
     def test_etat_parcellaire_uses_strict_joins_and_sum(self):
         # La requête de production utilise JOIN (pas LEFT JOIN) sur la

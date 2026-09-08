@@ -35,6 +35,15 @@ REFERENTIELS_PAR_MILLESIME = {
         "proprietaire": ("x_ff2024_non_ano_dep", "d95_fftp_2024_proprietaire_droit_non_ano"),
         "gpa": ("r_drieat", "gpa_annexe_1"),
     },
+    # Confirmé par information_schema.tables sur la base réelle : un seul
+    # schéma (pas de split dep/non_ano), tables suffixées par l'année
+    # plutôt que préfixées, pas de préfixe départemental d95_.
+    2025: {
+        "parcelle": ("x_ff2025_non_ano", "fftp_pnb10_parcelle_2025"),
+        "suf": ("x_ff2025_non_ano", "fftp_pnb21_suf_2025"),
+        "proprietaire": ("x_ff2025_non_ano", "fftp_proprietaire_droit_non_ano_2025"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
 }
 
 PARCELLE_COLUMNS = {
