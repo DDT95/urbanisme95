@@ -147,6 +147,65 @@ class TestReadCsvRows(unittest.TestCase):
             finally:
                 os.remove(path)
 
+    def test_idpar_column_alone(self):
+        path = _write_csv(
+            [{"idpar": "955100000A0021"}],
+            ["idpar"],
+        )
+        try:
+            rows = read_csv_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["id"], "955100000A0021")
+            self.assertEqual(rows[0]["commune"], "95510")
+            self.assertEqual(rows[0]["section"], "0A")
+            self.assertEqual(rows[0]["numero"], "0021")
+        finally:
+            os.remove(path)
+
+    def test_idpar_takes_priority_over_commune_numero_when_filled(self):
+        # idpar rempli et cohérent avec commune/numero, mais numero
+        # volontairement incohérent : idpar doit l'emporter.
+        path = _write_csv(
+            [{"idpar": "955100000A0021", "commune": "95510", "numero": "A999"}],
+            ["idpar", "commune", "numero"],
+        )
+        try:
+            rows = read_csv_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["id"], "955100000A0021")
+        finally:
+            os.remove(path)
+
+    def test_idpar_falls_back_to_commune_numero_per_row(self):
+        # 1re ligne : idpar vide -> repli sur commune/numero.
+        # 2e ligne : idpar rempli -> utilisé directement.
+        path = _write_csv(
+            [
+                {"idpar": "", "commune": "95510", "numero": "A21"},
+                {"idpar": "955100000A0025", "commune": "", "numero": ""},
+            ],
+            ["idpar", "commune", "numero"],
+        )
+        try:
+            rows = read_csv_rows(path)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["id"], "955100000A0021")
+            self.assertEqual(rows[1]["id"], "955100000A0025")
+        finally:
+            os.remove(path)
+
+    def test_malformed_idpar_raises_with_line_number(self):
+        path = _write_csv(
+            [{"idpar": "PAS_UN_IDPAR"}],
+            ["idpar"],
+        )
+        try:
+            with self.assertRaises(CsvFormatError) as ctx:
+                read_csv_rows(path)
+            self.assertIn("Ligne 2", str(ctx.exception))
+        finally:
+            os.remove(path)
+
     def test_unreadable_combined_numero_raises(self):
         path = _write_csv(
             [{"commune": "95510", "numero": "327"}],  # pas de section
