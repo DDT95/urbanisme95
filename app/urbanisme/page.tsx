@@ -106,15 +106,6 @@ function publicBuildingCategoryOf(feature:any):PublicBuildingCategory|null{
   }
   return null;
 }
-function buildPublicBuildingsCql(){
-  const natures=new Set<string>(), usages=new Set<string>();
-  Object.values(publicBuildingCategoryFilters).forEach((filter)=>{filter.natures?.forEach((n)=>natures.add(n));filter.usages?.forEach((u)=>usages.add(u));});
-  const quote=(values:Set<string>)=>[...values].map((value)=>`'${value.replace(/'/g,"''")}'`).join(",");
-  const clauses:string[]=[];
-  if(natures.size)clauses.push(`nature IN (${quote(natures)})`);
-  if(usages.size)clauses.push(`usage_1 IN (${quote(usages)}) OR usage_2 IN (${quote(usages)})`);
-  return clauses.join(" OR ");
-}
 function dpeColor(classe:string){ return ({A:"#008941",B:"#3cb44a",C:"#a8c936",D:"#e3b341",E:"#e07a2c",F:"#e1541f",G:"#c1121f"} as Record<string,string>)[String(classe||"").toUpperCase()] || "#687787"; }
 function publicRiskColor(count:number){ if(count>=4)return "#c1121f"; if(count>=2)return "#e1541f"; if(count>=1)return "#e3b341"; return "#687787"; }
 function elecConsumptionValue(entry:Record<string,unknown>):number|null{
@@ -162,8 +153,6 @@ export default function UrbanismePage() {
   const gpuRequestRef = useRef<AbortController | null>(null);
   const publicBuildingsLayerRef = useRef<any>(null);
   const publicBuildingsDataRef = useRef<Map<string, any>>(new Map());
-  const publicBuildingsLoadedRef = useRef(false);
-  const publicBuildingsLoadingRef = useRef(false);
   const publicBuildingsRequestRef = useRef<AbortController | null>(null);
   const publicBuildingsEnrichRef = useRef<Map<string, { dpe?: string; destination?: string; elec?: number | null; dpeLoaded?: boolean; riskCount?: number; riskNames?: string; riskLoaded?: boolean }>>(new Map());
   const enrichmentInFlightRef = useRef<{ dpe: boolean; risks: boolean }>({ dpe: false, risks: false });
@@ -435,57 +424,40 @@ export default function UrbanismePage() {
           publicBuildingsRequestRef.current?.abort();
           return;
         }
-        if(publicBuildingsLoadedRef.current){
-          applyPublicBuildingsStyle();
-          if(!map.hasLayer(publicBuildingsLayerRef.current))publicBuildingsLayerRef.current.addTo(map);
-          if(buildingInfoModeRef.current==="dpe"||buildingInfoModeRef.current==="elec")ensureDpeElecEnrichment();
-          if(buildingInfoModeRef.current==="risks")ensureRisksEnrichment();
+        if(map.getZoom()<12){
+          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
+          setLayerFeedback("Zoomez au niveau 12 pour afficher les bâtiments publics de cette zone (ex. cadrez une commune).");
           return;
         }
-        if(publicBuildingsLoadingRef.current)return;
-        const bounds=departmentBoundsRef.current;
-        if(!bounds){ setLayerFeedback("Préparation de l’emprise complète du Val-d’Oise…"); return; }
-        publicBuildingsLoadingRef.current=true;setLayerLoading((current)=>({...current,publicBuildings:true}));
+        setLayerLoading((current)=>({...current,publicBuildings:true}));
+        const bounds=map.getBounds();
         const bbox=[bounds.getWest(),bounds.getSouth(),bounds.getEast(),bounds.getNorth(),"EPSG:4326"].join(",");
-        const cql=buildPublicBuildingsCql();
         publicBuildingsRequestRef.current?.abort();const controller=new AbortController();publicBuildingsRequestRef.current=controller;
-        const fetchWfsPage = async (extraParams:string) => {
+        try{
+          const base=`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3%3Abatiment&srsName=EPSG%3A4326&BBOX=${bbox}&outputFormat=application%2Fjson&COUNT=5000`;
           const collected:any[]=[]; let offset=0;
           while(true){
-            const url=`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3%3Abatiment&srsName=EPSG%3A4326&outputFormat=application%2Fjson&COUNT=1000&STARTINDEX=${offset}&${extraParams}`;
-            const response=await fetch(url,{signal:controller.signal});
-            if(!response.ok)throw new Error(`WFS bâtiments publics : réponse ${response.status}`);
+            const response=await fetch(`${base}&STARTINDEX=${offset}`,{signal:controller.signal});
+            if(!response.ok)throw new Error(`réponse ${response.status}`);
             const page=await response.json();
-            if(!Array.isArray(page.features))throw new Error("Réponse WFS inattendue pour les bâtiments publics");
-            collected.push(...page.features); offset+=page.features.length;
-            setLayerFeedback(`Chargement des bâtiments publics : ${collected.length.toLocaleString("fr-FR")}…`);
-            if(page.features.length<1000||offset>20000)break;
-          }
-          return collected;
-        };
-        try{
-          let collected:any[];
-          try{
-            collected=await fetchWfsPage(`BBOX=${bbox}&CQL_FILTER=${encodeURIComponent(cql)}`);
-          }catch(primaryError:any){
-            if(primaryError?.name==="AbortError")return;
-            console.warn("WFS bâtiments publics (BBOX+CQL_FILTER) a échoué, nouvel essai avec l’emprise intégrée au filtre",primaryError);
-            const [west,south,east,north]=bbox.split(",");
-            const spatial=`BBOX(geometrie,${west},${south},${east},${north})`;
-            collected=await fetchWfsPage(`CQL_FILTER=${encodeURIComponent(`${spatial} AND (${cql})`)}`);
+            const pageFeatures=Array.isArray(page.features)?page.features:[];
+            collected.push(...pageFeatures); offset+=pageFeatures.length;
+            setLayerFeedback(`Chargement des bâtiments de cette vue : ${collected.length.toLocaleString("fr-FR")}…`);
+            if(pageFeatures.length<5000||offset>60000)break;
           }
           if(controller.signal.aborted)return;
           const dataMap=new Map<string,any>();
-          collected.forEach((feature:any)=>{const category=publicBuildingCategoryOf(feature);if(!category)return;const id=String(feature.id||feature.properties?.cleabs||`${category}-${dataMap.size}`);dataMap.set(id,{...feature,properties:{...feature.properties,_category:category}});});
+          collected.forEach((feature:any)=>{const category=publicBuildingCategoryOf(feature);if(!category||!publicBuildingCatsRef.current[category])return;const id=String(feature.id||feature.properties?.cleabs||`${category}-${dataMap.size}`);dataMap.set(id,{...feature,properties:{...feature.properties,_category:category}});});
           publicBuildingsDataRef.current=dataMap;
+          const previous=publicBuildingsLayerRef.current;
           publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{renderer:L.canvas({padding:.5}),style:publicBuildingStyle,onEachFeature:bindPublicBuildingTooltip}).addTo(map);
-          publicBuildingsLoadedRef.current=true;
-          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans le Val-d’Oise (BD TOPO).`:"Aucun bâtiment public retourné par la BD TOPO pour les catégories sélectionnées. Réessayez ou signalez le problème.");
+          if(previous&&map.hasLayer(previous))map.removeLayer(previous);
+          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans cette vue (BD TOPO).`:`Aucun bâtiment public trouvé dans cette vue parmi les ${collected.length.toLocaleString("fr-FR")} bâtiments BD TOPO analysés. Essayez une autre zone.`);
           parcelTilesRef.current?.bringToFront(); buildingTilesRef.current?.bringToFront();
           if(buildingInfoModeRef.current==="dpe"||buildingInfoModeRef.current==="elec")ensureDpeElecEnrichment();
           if(buildingInfoModeRef.current==="risks")ensureRisksEnrichment();
         }catch(error:any){ if(error?.name!=="AbortError"){console.warn("Bâtiments publics indisponibles",error);setLayerFeedback(`La BD TOPO ne répond pas pour les bâtiments publics (${error?.message||"erreur réseau"}).`);} }
-        finally{ publicBuildingsLoadingRef.current=false;if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
+        finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
       };
       const adaptLayerReadability=()=>{const zoom=map.getZoom();parcelTilesRef.current?.setOpacity(zoom>=15?.92:zoom>=13?.68:.48);buildingTilesRef.current?.setOpacity(zoom>=16?.9:zoom>=14?.62:.38);if(mosLayerRef.current?.setStyle)mosLayerRef.current.setStyle((feature:any)=>({color:mosColor(numberValue(feature?.properties?.mos2025)),weight:zoom>=14?.8:.5,fillColor:mosColor(numberValue(feature?.properties?.mos2025)),fillOpacity:zoom>=14?.52:.34}));if(pluTilesRef.current?.setStyle)pluTilesRef.current.setStyle((feature:any)=>({color:zoneColor(feature),weight:zoom>=14?1.5:1,fillColor:zoneColor(feature),fillOpacity:zoom>=14?.26:.18}));if(supTilesRef.current?.setStyle)supTilesRef.current.setStyle((feature:any)=>({color:supColor(feature),weight:zoom>=14?2.5:1.7,fillColor:supColor(feature),fillOpacity:zoom>=14?.10:.055,dashArray:feature.geometry?.type?.includes("Polygon")?"7 5":undefined}));};
       map.on("zoomend", () => { setMapZoom(map.getZoom()); adaptLayerReadability(); refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); refreshPublicBuildings(); });
@@ -955,7 +927,7 @@ export default function UrbanismePage() {
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="dpe" && <div className="mos-mini-legend"><strong>DPE des bâtiments publics</strong><span><i style={{background:"#008941"}}/>A</span><span><i style={{background:"#3cb44a"}}/>B</span><span><i style={{background:"#a8c936"}}/>C</span><span><i style={{background:"#e3b341"}}/>D</span><span><i style={{background:"#e07a2c"}}/>E</span><span><i style={{background:"#e1541f"}}/>F</span><span><i style={{background:"#c1121f"}}/>G</span><small>Classe DPE issue de la BDNB, recherchée pour chaque bâtiment sélectionné. Peut prendre quelques instants sur tout le département.</small></div>}
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="elec" && <div className="mos-mini-legend"><strong>Consommation électrique estimée</strong><span><i style={{background:"#3cb44a"}}/>Faible</span><span><i style={{background:"#a8c936"}}/>Modérée</span><span><i style={{background:"#e3b341"}}/>Élevée</span><span><i style={{background:"#e1541f"}}/>Très élevée</span><span><i style={{background:"#c1121f"}}/>Extrême</span><small>Échelle indicative à partir des données BDNB disponibles pour ce bâtiment.</small></div>}
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="risks" && <div className="mos-mini-legend"><strong>Risques des bâtiments publics</strong><span><i style={{background:"#687787"}}/>Aucun risque recensé</span><span><i style={{background:"#e3b341"}}/>1 risque</span><span><i style={{background:"#e1541f"}}/>2-3 risques</span><span><i style={{background:"#c1121f"}}/>4 risques ou plus</span><small>Risques Géorisques interrogés au centre de chaque équipement public sélectionné.</small></div>}
-            <p className="public-land-note"><i/>Catégorisation par nature/usage IGN BD TOPO ; destination précise, DPE et consommation électrique complétés depuis la BDNB.</p>
+            <p className="public-land-note"><i/>Catégorisation par nature/usage IGN BD TOPO, affichée à partir du niveau de zoom 12 (cadrez une commune) ; destination précise, DPE et consommation électrique complétés depuis la BDNB.</p>
           </section>
           <details className="urban-services"><summary><span><strong>Sources publiques</strong><small>{Object.values(services).filter((state)=>state==="online").length}/8 services disponibles</small></span><b>{Object.values(services).every((state)=>state==="online")?"Connecté":"Vérification"}</b></summary><div className="urban-service-grid">{Object.entries(services).map(([name,state])=><span key={name}><i className={state}/><strong>{name}</strong><small>{state==="online"?"Disponible":state==="error"?"Indisponible":"Connexion…"}</small></span>)}</div></details>
         </aside>
