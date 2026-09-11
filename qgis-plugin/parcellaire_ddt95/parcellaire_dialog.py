@@ -48,6 +48,18 @@ class ParcellaireDialog(QDialog):
         csv_row.addWidget(csv_btn)
         form.addRow("Fichier CSV des parcelles", csv_row)
 
+        csv_info = QLabel(
+            "Colonnes acceptées (au choix) :\n"
+            "• idpar (identifiant complet à 14 caractères)\n"
+            "• commune (code INSEE) + numero (ex. « A327 », section incluse)\n"
+            "• commune + section + numero, en colonnes séparées\n"
+            "Ces formes peuvent être mélangées ligne par ligne : idpar est "
+            "utilisé en priorité quand il est rempli, sinon commune/numero."
+        )
+        csv_info.setWordWrap(True)
+        csv_info.setStyleSheet("color: grey; font-style: italic;")
+        form.addRow("", csv_info)
+
         conn_row = QHBoxLayout()
         self.connection_combo = QComboBox()
         refresh_btn = QPushButton("Actualiser")
