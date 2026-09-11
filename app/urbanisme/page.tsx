@@ -106,6 +106,38 @@ function publicBuildingCategoryOf(feature:any):PublicBuildingCategory|null{
   }
   return null;
 }
+const bpeCategoryKeywords: Record<PublicBuildingCategory,string[]> = {
+  townhall:["mairie","préfecture","prefecture","sous-préfecture","sous-prefecture","hôtel de région","hôtel de département","hotel de region","hotel de departement","trésorerie","tresorerie","service public"],
+  education:["école maternelle","ecole maternelle","école élémentaire","ecole elementaire","collège","college","lycée","lycee","université","universite","formation","cfa","école primaire","ecole primaire"],
+  health:["hôpital","hopital","clinique","maternité","maternite","centre de santé","centre de sante","urgence","médecin","medecin","dentiste","infirmier","pharmacie","ehpad"],
+  sport:["gymnase","piscine","stade","terrain de sport","salle de sport","tennis","boulodrome","city stade","équipement sportif","equipement sportif","patinoire","salle multisport"],
+  religious:["église","eglise","chapelle","temple","synagogue","mosquée","mosquee","paroisse","culte"],
+  security:["gendarmerie","police","commissariat","caserne","pompier","sécurité civile","securite civile","pénitentiaire","penitentiaire"],
+};
+function bpeCategoryOf(record:Record<string,unknown>):PublicBuildingCategory|null{
+  const text=Object.values(record).filter((value)=>typeof value==="string").join(" | ").toLocaleLowerCase("fr");
+  for(const key of publicBuildingCategoryOrder){ if(bpeCategoryKeywords[key].some((keyword)=>text.includes(keyword))) return key; }
+  return null;
+}
+function bpeLabel(record:Record<string,unknown>):string{
+  const candidates=["lib_equip","libelle","lib_type_equip","nom","nom_equip","type_equipement_libelle","denomination"];
+  for(const key of candidates) if(typeof record[key]==="string" && record[key]) return record[key] as string;
+  const firstString=Object.entries(record).find(([key,value])=>typeof value==="string"&&(value as string).length>2&&!/^\d+$/.test(value as string));
+  return firstString?String(firstString[1]):"Équipement (BPE)";
+}
+function bpeCoordinates(record:Record<string,unknown>):[number,number]|null{
+  for(const [key,value] of Object.entries(record)){
+    if(value && typeof value==="object" && !Array.isArray(value)){
+      const point=value as Record<string,unknown>;
+      const lon=Number(point.lon??point.longitude??point.lng); const lat=Number(point.lat??point.latitude);
+      if(Number.isFinite(lon)&&Number.isFinite(lat)&&Math.abs(lon)<=180&&Math.abs(lat)<=90) return [lon,lat];
+    }
+  }
+  const latKey=Object.keys(record).find((key)=>/^lat/i.test(key));
+  const lonKey=Object.keys(record).find((key)=>/^lon|^lng/i.test(key));
+  if(latKey&&lonKey){ const lat=Number(record[latKey]),lon=Number(record[lonKey]); if(Number.isFinite(lat)&&Number.isFinite(lon)) return [lon,lat]; }
+  return null;
+}
 function dpeColor(classe:string){ return ({A:"#008941",B:"#3cb44a",C:"#a8c936",D:"#e3b341",E:"#e07a2c",F:"#e1541f",G:"#c1121f"} as Record<string,string>)[String(classe||"").toUpperCase()] || "#687787"; }
 function publicRiskColor(count:number){ if(count>=4)return "#c1121f"; if(count>=2)return "#e1541f"; if(count>=1)return "#e3b341"; return "#687787"; }
 function elecConsumptionValue(entry:Record<string,unknown>):number|null{
@@ -182,6 +214,9 @@ export default function UrbanismePage() {
   const [buildingInfoMode, setBuildingInfoMode] = useState<"category"|"dpe"|"elec"|"risks">("category");
   const buildingInfoModeRef = useRef(buildingInfoMode);
   useEffect(() => { buildingInfoModeRef.current = buildingInfoMode; }, [buildingInfoMode]);
+  const [buildingSource, setBuildingSource] = useState<"bdtopo"|"bpe">("bdtopo");
+  const buildingSourceRef = useRef(buildingSource);
+  useEffect(() => { buildingSourceRef.current = buildingSource; }, [buildingSource]);
   const [services, setServices] = useState<Record<string,"checking"|"online"|"error">>({ Adresse:"checking", Cadastre:"checking", Urbanisme:"checking", Risques:"checking", Bâti:"checking", MOS:"checking", Foncier:"checking", Mutations:"checking" });
   const [message, setMessage] = useState("Recherchez une adresse ou cliquez sur la carte.");
   const layersStateRef = useRef(layers);
@@ -347,7 +382,7 @@ export default function UrbanismePage() {
         layer.bindTooltip(()=>{
           const p=feature.properties||{}; const category=p._category as PublicBuildingCategory|null;
           const info=publicBuildingsEnrichRef.current.get(id);
-          const rows=[`<b>${escapeHtml(category?publicBuildingCategoryInfo[category].label:"Bâtiment public")}</b>`,`<span>${escapeHtml(p.nature||p.usage_1||"Nature non renseignée")}</span>`];
+          const rows=[`<b>${escapeHtml(category?publicBuildingCategoryInfo[category].label:"Bâtiment public")}</b>`,`<span>${escapeHtml(p._label||p.nature||p.usage_1||"Nature non renseignée")}</span>`];
           if(info?.destination)rows.push(`<small>Destination BDNB : ${escapeHtml(info.destination)}</small>`);
           rows.push(`<small>DPE : ${escapeHtml(info?.dpe||"Non chargé")}</small>`);
           rows.push(`<small>Conso. électrique : ${info?.elec!=null?`${formatNumber(info.elec)} kWh/an (estim. BDNB)`:"Non chargée"}</small>`);
@@ -417,18 +452,7 @@ export default function UrbanismePage() {
         if(!controller.signal.aborted){ applyPublicBuildingsStyle(); setLayerFeedback(`Risques disponibles pour ${targets.length.toLocaleString("fr-FR")} bâtiments publics.`); }
         enrichmentInFlightRef.current.risks=false;setLayerLoading((current)=>({...current,publicRisks:false}));
       };
-      const refreshPublicBuildings = async () => {
-        const anyEnabled=Object.values(publicBuildingCatsRef.current).some(Boolean);
-        if(!anyEnabled){
-          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
-          publicBuildingsRequestRef.current?.abort();
-          return;
-        }
-        if(map.getZoom()<12){
-          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
-          setLayerFeedback("Zoomez au niveau 12 pour afficher les bâtiments publics de cette zone (ex. cadrez une commune).");
-          return;
-        }
+      const refreshPublicBuildingsBdTopo = async () => {
         setLayerLoading((current)=>({...current,publicBuildings:true}));
         const bounds=map.getBounds();
         const bbox=[bounds.getWest(),bounds.getSouth(),bounds.getEast(),bounds.getNorth(),"EPSG:4326"].join(",");
@@ -458,6 +482,48 @@ export default function UrbanismePage() {
           if(buildingInfoModeRef.current==="risks")ensureRisksEnrichment();
         }catch(error:any){ if(error?.name!=="AbortError"){console.warn("Bâtiments publics indisponibles",error);setLayerFeedback(`La BD TOPO ne répond pas pour les bâtiments publics (${error?.message||"erreur réseau"}).`);} }
         finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
+      };
+      const refreshPublicBuildingsBpe = async () => {
+        setLayerLoading((current)=>({...current,publicBuildings:true}));
+        const bounds=map.getBounds();
+        publicBuildingsRequestRef.current?.abort();const controller=new AbortController();publicBuildingsRequestRef.current=controller;
+        try{
+          const bboxParam=`${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+          const url=`https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/bpe23-nettoye/records?geofilter.bbox=${encodeURIComponent(bboxParam)}&refine.dep=95&limit=100`;
+          const response=await fetch(url,{signal:controller.signal});
+          if(!response.ok)throw new Error(`réponse ${response.status}`);
+          const data=await response.json();
+          const records:any[]=Array.isArray(data?.results)?data.results:Array.isArray(data?.records)?data.records.map((r:any)=>({...r.fields,...r})):[];
+          if(controller.signal.aborted)return;
+          const dataMap=new Map<string,any>();
+          records.forEach((record:any,index:number)=>{
+            const category=bpeCategoryOf(record); if(!category||!publicBuildingCatsRef.current[category])return;
+            const coordinates=bpeCoordinates(record); if(!coordinates)return;
+            const id=`bpe-${category}-${index}`;
+            dataMap.set(id,{type:"Feature",id,geometry:{type:"Point",coordinates},properties:{...record,_category:category,_label:bpeLabel(record)}});
+          });
+          publicBuildingsDataRef.current=dataMap;
+          const previous=publicBuildingsLayerRef.current;
+          publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:7,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
+          if(previous&&map.hasLayer(previous))map.removeLayer(previous);
+          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans cette vue (BPE, expérimental).`:`Aucun équipement retenu dans cette vue parmi les ${records.length.toLocaleString("fr-FR")} enregistrements BPE reçus (source expérimentale, non garantie).`);
+        }catch(error:any){ if(error?.name!=="AbortError"){console.warn("BPE indisponible",error);setLayerFeedback(`La BPE (Île-de-France) ne répond pas comme attendu (${error?.message||"erreur réseau"}) — source expérimentale, essayez « BD TOPO ».`);} }
+        finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
+      };
+      const refreshPublicBuildings = async () => {
+        const anyEnabled=Object.values(publicBuildingCatsRef.current).some(Boolean);
+        if(!anyEnabled){
+          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
+          publicBuildingsRequestRef.current?.abort();
+          return;
+        }
+        if(map.getZoom()<12){
+          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
+          setLayerFeedback("Zoomez au niveau 12 pour afficher les bâtiments publics de cette zone (ex. cadrez une commune).");
+          return;
+        }
+        if(buildingSourceRef.current==="bpe")await refreshPublicBuildingsBpe();
+        else await refreshPublicBuildingsBdTopo();
       };
       const adaptLayerReadability=()=>{const zoom=map.getZoom();parcelTilesRef.current?.setOpacity(zoom>=15?.92:zoom>=13?.68:.48);buildingTilesRef.current?.setOpacity(zoom>=16?.9:zoom>=14?.62:.38);if(mosLayerRef.current?.setStyle)mosLayerRef.current.setStyle((feature:any)=>({color:mosColor(numberValue(feature?.properties?.mos2025)),weight:zoom>=14?.8:.5,fillColor:mosColor(numberValue(feature?.properties?.mos2025)),fillOpacity:zoom>=14?.52:.34}));if(pluTilesRef.current?.setStyle)pluTilesRef.current.setStyle((feature:any)=>({color:zoneColor(feature),weight:zoom>=14?1.5:1,fillColor:zoneColor(feature),fillOpacity:zoom>=14?.26:.18}));if(supTilesRef.current?.setStyle)supTilesRef.current.setStyle((feature:any)=>({color:supColor(feature),weight:zoom>=14?2.5:1.7,fillColor:supColor(feature),fillOpacity:zoom>=14?.10:.055,dashArray:feature.geometry?.type?.includes("Polygon")?"7 5":undefined}));};
       map.on("zoomend", () => { setMapZoom(map.getZoom()); adaptLayerReadability(); refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); refreshPublicBuildings(); });
@@ -511,7 +577,7 @@ export default function UrbanismePage() {
     const map = mapRef.current; if (!map) return;
     map.setMinZoom(10);
     map.fire("moveend");
-  }, [publicBuildingCats, buildingInfoMode]);
+  }, [publicBuildingCats, buildingInfoMode, buildingSource]);
 
   useEffect(() => {
     const map = mapRef.current; if (!map) return;
@@ -914,6 +980,10 @@ export default function UrbanismePage() {
             {layers.publicLand && <div className="public-land-controls"><strong>Quel foncier afficher ?</strong><div><button type="button" className={publicLandFilter==="state"?"active":""} onClick={()=>setPublicLandFilter("state")}><i style={{background:"#e1000f"}}/>État uniquement</button><button type="button" className={publicLandFilter==="all"?"active":""} onClick={()=>setPublicLandFilter("all")}>Tout le foncier public</button></div><label>Afficher le foncier de l’État par commune<select defaultValue="" onChange={(event)=>{if(event.target.value)exploreCommune(event.target.value);}}><option value="">Choisir une commune…</option>{stateLandByCommune.map((item)=><option key={item.code} value={item.code}>{item.name} · {item.count.toLocaleString("fr-FR")} parcelles</option>)}</select></label>{publicLandFilter==="all"&&<div className="public-mini-legend"><span><i style={{background:"#e1000f"}}/>État</span><span><i style={{background:"#6f4c9b"}}/>Région</span><span><i style={{background:"#000091"}}/>Département</span><span><i style={{background:"#18753c"}}/>Commune</span><span><i style={{background:"#0098d8"}}/>HLM</span><span><i style={{background:"#7b61a8"}}/>Établissement</span></div>}</div>}
             <p className="public-land-note"><i/>Référentiel présumé : parcelles de personnes morales classées État, région, département, communes, HLM, SEM et établissements publics — millésime 2025.</p>
             <div className="urban-layer-head public-buildings-head"><span><small>Groupe de couches</small><strong>Bâtiments publics</strong></span>{layerLoading.publicBuildings && <em className="layer-spinner" aria-hidden="true"/>}</div>
+            <div className="public-buildings-mode"><strong>Source des bâtiments</strong><div>
+              <button type="button" className={buildingSource==="bdtopo"?"active":""} onClick={()=>setBuildingSource("bdtopo")}>BD TOPO (fiable)</button>
+              <button type="button" className={buildingSource==="bpe"?"active":""} onClick={()=>setBuildingSource("bpe")}>BPE INSEE (expérimental)</button>
+            </div>{buildingSource==="bpe" && <small className="bpe-warning">Source en test : requête non vérifiée en conditions réelles, peut ne rien afficher.</small>}</div>
             <div className="urban-layer-list public-buildings-list">
               {publicBuildingCategoryOrder.map((key) => {const info=publicBuildingCategoryInfo[key];const checked=publicBuildingCats[key];return <button key={key} type="button" role="switch" className="urban-layer-toggle" onClick={() => setPublicBuildingCats((current) => ({...current,[key]:!current[key]}))} aria-checked={checked}><i style={{background:info.color}}/><span><strong>{info.label}</strong><small>{info.description}</small></span><b aria-hidden="true"><em/></b></button>;})}
             </div>
