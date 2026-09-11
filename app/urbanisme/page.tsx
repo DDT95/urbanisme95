@@ -80,32 +80,15 @@ function supColor(feature:any){ const colors:Record<string,string>={"Patrimoine 
 function supTitle(feature:any){ const p=feature?.properties||{}, code=supCode(feature); return firstValue(p,["nomsuplitt","nomreg"],"") || supDescription(code); }
 function escapeHtml(value:unknown){ return String(value??"").replace(/[&<>"']/g,(character)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[character]||character)); }
 type PublicBuildingCategory = "townhall"|"education"|"health"|"sport"|"religious"|"security";
-const publicBuildingCategoryFilters: Record<PublicBuildingCategory,{natures?:string[];usages?:string[]}> = {
-  townhall: { natures:["Mairie","Préfecture","Sous-préfecture","Hôtel de région","Hôtel de département"] },
-  education: { usages:["Science et enseignement"] },
-  health: { natures:["Établissement de santé"] },
-  sport: { usages:["Sportif"] },
-  religious: { usages:["Religieux"] },
-  security: { natures:["Établissement pénitentiaire"] },
-};
 const publicBuildingCategoryInfo: Record<PublicBuildingCategory,{label:string;color:string;description:string}> = {
   townhall:{ label:"Mairies et administrations", color:"#000091", description:"Mairies, préfecture, sous-préfecture, hôtels de région et de département" },
-  education:{ label:"Écoles et enseignement", color:"#18753c", description:"Écoles, collèges, lycées et enseignement supérieur (usage « Science et enseignement » BD TOPO)" },
+  education:{ label:"Écoles et enseignement", color:"#18753c", description:"Écoles, collèges, lycées et enseignement supérieur" },
   health:{ label:"Santé", color:"#c1121f", description:"Hôpitaux, cliniques et établissements de santé" },
   sport:{ label:"Sport (gymnases, piscines…)", color:"#e07a2c", description:"Équipements sportifs, en usage principal ou secondaire" },
   religious:{ label:"Lieux de culte", color:"#a05a9c", description:"Édifices religieux" },
-  security:{ label:"Sécurité et secours", color:"#e3b341", description:"Établissements pénitentiaires (la BD TOPO n’identifie pas séparément casernes et commissariats)" },
+  security:{ label:"Sécurité et secours", color:"#e3b341", description:"Gendarmerie, police, casernes de pompiers, établissements pénitentiaires" },
 };
 const publicBuildingCategoryOrder = Object.keys(publicBuildingCategoryInfo) as PublicBuildingCategory[];
-function publicBuildingCategoryOf(feature:any):PublicBuildingCategory|null{
-  const p=feature?.properties||{}, nature=String(p.nature||""), usage1=String(p.usage_1||""), usage2=String(p.usage_2||"");
-  for(const key of publicBuildingCategoryOrder){
-    const filter=publicBuildingCategoryFilters[key];
-    if(filter.natures?.includes(nature))return key;
-    if(filter.usages && (filter.usages.includes(usage1)||filter.usages.includes(usage2)))return key;
-  }
-  return null;
-}
 const bpeCategoryKeywords: Record<PublicBuildingCategory,string[]> = {
   townhall:["mairie","préfecture","prefecture","sous-préfecture","sous-prefecture","hôtel de région","hôtel de département","hotel de region","hotel de departement","trésorerie","tresorerie","service public"],
   education:["école maternelle","ecole maternelle","école élémentaire","ecole elementaire","collège","college","lycée","lycee","université","universite","formation","cfa","école primaire","ecole primaire"],
@@ -218,9 +201,6 @@ export default function UrbanismePage() {
   const [buildingInfoMode, setBuildingInfoMode] = useState<"category"|"dpe"|"elec"|"risks">("category");
   const buildingInfoModeRef = useRef(buildingInfoMode);
   useEffect(() => { buildingInfoModeRef.current = buildingInfoMode; }, [buildingInfoMode]);
-  const [buildingSource, setBuildingSource] = useState<"bdtopo"|"bpe">("bdtopo");
-  const buildingSourceRef = useRef(buildingSource);
-  useEffect(() => { buildingSourceRef.current = buildingSource; }, [buildingSource]);
   const [services, setServices] = useState<Record<string,"checking"|"online"|"error">>({ Adresse:"checking", Cadastre:"checking", Urbanisme:"checking", Risques:"checking", Bâti:"checking", MOS:"checking", Foncier:"checking", Mutations:"checking" });
   const [message, setMessage] = useState("Recherchez une adresse ou cliquez sur la carte.");
   const layersStateRef = useRef(layers);
@@ -456,38 +436,6 @@ export default function UrbanismePage() {
         if(!controller.signal.aborted){ applyPublicBuildingsStyle(); setLayerFeedback(`Risques disponibles pour ${targets.length.toLocaleString("fr-FR")} bâtiments publics.`); }
         enrichmentInFlightRef.current.risks=false;setLayerLoading((current)=>({...current,publicRisks:false}));
       };
-      const refreshPublicBuildingsBdTopo = async () => {
-        setLayerLoading((current)=>({...current,publicBuildings:true}));
-        const bounds=map.getBounds();
-        const bbox=[bounds.getWest(),bounds.getSouth(),bounds.getEast(),bounds.getNorth(),"EPSG:4326"].join(",");
-        publicBuildingsRequestRef.current?.abort();const controller=new AbortController();publicBuildingsRequestRef.current=controller;
-        try{
-          const base=`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3%3Abatiment&srsName=EPSG%3A4326&BBOX=${bbox}&outputFormat=application%2Fjson&COUNT=5000`;
-          const collected:any[]=[]; let offset=0;
-          while(true){
-            const response=await fetch(`${base}&STARTINDEX=${offset}`,{signal:controller.signal});
-            if(!response.ok)throw new Error(`réponse ${response.status}`);
-            const page=await response.json();
-            const pageFeatures=Array.isArray(page.features)?page.features:[];
-            collected.push(...pageFeatures); offset+=pageFeatures.length;
-            setLayerFeedback(`Chargement des bâtiments de cette vue : ${collected.length.toLocaleString("fr-FR")}…`);
-            if(pageFeatures.length<5000||offset>60000)break;
-          }
-          if(controller.signal.aborted)return;
-          const dataMap=new Map<string,any>();
-          collected.forEach((feature:any)=>{const category=publicBuildingCategoryOf(feature);if(!category||!publicBuildingCatsRef.current[category])return;const id=String(feature.id||feature.properties?.cleabs||`${category}-${dataMap.size}`);dataMap.set(id,{...feature,properties:{...feature.properties,_category:category}});});
-          publicBuildingsDataRef.current=dataMap;
-          const markerFeatures=[...dataMap.values()].map((feature:any)=>({...feature,geometry:{type:"Point",coordinates:geometryCenter(feature.geometry)}}));
-          const previous=publicBuildingsLayerRef.current;
-          publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:markerFeatures},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:8,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
-          if(previous&&map.hasLayer(previous))map.removeLayer(previous);
-          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans cette vue (BD TOPO).`:`Aucun bâtiment public trouvé dans cette vue parmi les ${collected.length.toLocaleString("fr-FR")} bâtiments BD TOPO analysés. Essayez une autre zone.`);
-          parcelTilesRef.current?.bringToFront(); buildingTilesRef.current?.bringToFront();
-          if(buildingInfoModeRef.current==="dpe"||buildingInfoModeRef.current==="elec")ensureDpeElecEnrichment();
-          if(buildingInfoModeRef.current==="risks")ensureRisksEnrichment();
-        }catch(error:any){ if(error?.name!=="AbortError"){console.warn("Bâtiments publics indisponibles",error);setLayerFeedback(`La BD TOPO ne répond pas pour les bâtiments publics (${error?.message||"erreur réseau"}).`);} }
-        finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
-      };
       const refreshPublicBuildingsBpe = async () => {
         const commune=activeCommuneRef.current;
         if(!commune){
@@ -529,8 +477,8 @@ export default function UrbanismePage() {
           const previous=publicBuildingsLayerRef.current;
           publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:8,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
           if(previous&&map.hasLayer(previous))map.removeLayer(previous);
-          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés à ${commune} (BPE, expérimental).`:`Aucun équipement retenu à ${commune} parmi les ${records.length.toLocaleString("fr-FR")} enregistrements BPE reçus (source expérimentale, non garantie).`);
-        }catch(error:any){ if(error?.name!=="AbortError"){console.warn("BPE indisponible",error);setLayerFeedback(`La BPE (Île-de-France) ne répond pas comme attendu (${error?.message||"erreur réseau"}) — source expérimentale, essayez « BD TOPO ».`);} }
+          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés à ${commune} (BPE).`:`Aucun équipement retenu à ${commune} parmi les ${records.length.toLocaleString("fr-FR")} enregistrements BPE reçus.`);
+        }catch(error:any){ if(error?.name!=="AbortError"){console.warn("BPE indisponible",error);setLayerFeedback(`La BPE (Île-de-France) ne répond pas comme attendu (${error?.message||"erreur réseau"}).`);} }
         finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
       };
       const refreshPublicBuildings = async () => {
@@ -540,13 +488,7 @@ export default function UrbanismePage() {
           publicBuildingsRequestRef.current?.abort();
           return;
         }
-        if(map.getZoom()<12){
-          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
-          setLayerFeedback("Zoomez au niveau 12 pour afficher les bâtiments publics de cette zone (ex. cadrez une commune).");
-          return;
-        }
-        if(buildingSourceRef.current==="bpe")await refreshPublicBuildingsBpe();
-        else await refreshPublicBuildingsBdTopo();
+        await refreshPublicBuildingsBpe();
       };
       const adaptLayerReadability=()=>{const zoom=map.getZoom();parcelTilesRef.current?.setOpacity(zoom>=15?.92:zoom>=13?.68:.48);buildingTilesRef.current?.setOpacity(zoom>=16?.9:zoom>=14?.62:.38);if(mosLayerRef.current?.setStyle)mosLayerRef.current.setStyle((feature:any)=>({color:mosColor(numberValue(feature?.properties?.mos2025)),weight:zoom>=14?.8:.5,fillColor:mosColor(numberValue(feature?.properties?.mos2025)),fillOpacity:zoom>=14?.52:.34}));if(pluTilesRef.current?.setStyle)pluTilesRef.current.setStyle((feature:any)=>({color:zoneColor(feature),weight:zoom>=14?1.5:1,fillColor:zoneColor(feature),fillOpacity:zoom>=14?.26:.18}));if(supTilesRef.current?.setStyle)supTilesRef.current.setStyle((feature:any)=>({color:supColor(feature),weight:zoom>=14?2.5:1.7,fillColor:supColor(feature),fillOpacity:zoom>=14?.10:.055,dashArray:feature.geometry?.type?.includes("Polygon")?"7 5":undefined}));};
       map.on("zoomend", () => { setMapZoom(map.getZoom()); adaptLayerReadability(); refreshBuildings(); refreshMos(); refreshPublicLand(); refreshGpuLayers(); refreshPublicBuildings(); });
@@ -600,7 +542,7 @@ export default function UrbanismePage() {
     const map = mapRef.current; if (!map) return;
     map.setMinZoom(10);
     map.fire("moveend");
-  }, [publicBuildingCats, buildingInfoMode, buildingSource]);
+  }, [publicBuildingCats, buildingInfoMode, activeCommune]);
 
   useEffect(() => {
     const map = mapRef.current; if (!map) return;
@@ -1003,10 +945,6 @@ export default function UrbanismePage() {
             {layers.publicLand && <div className="public-land-controls"><strong>Quel foncier afficher ?</strong><div><button type="button" className={publicLandFilter==="state"?"active":""} onClick={()=>setPublicLandFilter("state")}><i style={{background:"#e1000f"}}/>État uniquement</button><button type="button" className={publicLandFilter==="all"?"active":""} onClick={()=>setPublicLandFilter("all")}>Tout le foncier public</button></div><label>Afficher le foncier de l’État par commune<select defaultValue="" onChange={(event)=>{if(event.target.value)exploreCommune(event.target.value);}}><option value="">Choisir une commune…</option>{stateLandByCommune.map((item)=><option key={item.code} value={item.code}>{item.name} · {item.count.toLocaleString("fr-FR")} parcelles</option>)}</select></label>{publicLandFilter==="all"&&<div className="public-mini-legend"><span><i style={{background:"#e1000f"}}/>État</span><span><i style={{background:"#6f4c9b"}}/>Région</span><span><i style={{background:"#000091"}}/>Département</span><span><i style={{background:"#18753c"}}/>Commune</span><span><i style={{background:"#0098d8"}}/>HLM</span><span><i style={{background:"#7b61a8"}}/>Établissement</span></div>}</div>}
             <p className="public-land-note"><i/>Référentiel présumé : parcelles de personnes morales classées État, région, département, communes, HLM, SEM et établissements publics — millésime 2025.</p>
             <div className="urban-layer-head public-buildings-head"><span><small>Groupe de couches</small><strong>Bâtiments publics</strong></span>{layerLoading.publicBuildings && <em className="layer-spinner" aria-hidden="true"/>}</div>
-            <div className="public-buildings-mode"><strong>Source des bâtiments</strong><div>
-              <button type="button" className={buildingSource==="bdtopo"?"active":""} onClick={()=>setBuildingSource("bdtopo")}>BD TOPO (fiable)</button>
-              <button type="button" className={buildingSource==="bpe"?"active":""} onClick={()=>setBuildingSource("bpe")}>BPE INSEE (expérimental)</button>
-            </div>{buildingSource==="bpe" && <small className="bpe-warning">Source en test : requête non vérifiée en conditions réelles, peut ne rien afficher.</small>}</div>
             <div className="urban-layer-list public-buildings-list">
               {publicBuildingCategoryOrder.map((key) => {const info=publicBuildingCategoryInfo[key];const checked=publicBuildingCats[key];return <button key={key} type="button" role="switch" className="urban-layer-toggle" onClick={() => setPublicBuildingCats((current) => ({...current,[key]:!current[key]}))} aria-checked={checked}><i style={{background:info.color}}/><span><strong>{info.label}</strong><small>{info.description}</small></span><b aria-hidden="true"><em/></b></button>;})}
             </div>
@@ -1020,7 +958,7 @@ export default function UrbanismePage() {
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="dpe" && <div className="mos-mini-legend"><strong>DPE des bâtiments publics</strong><span><i style={{background:"#008941"}}/>A</span><span><i style={{background:"#3cb44a"}}/>B</span><span><i style={{background:"#a8c936"}}/>C</span><span><i style={{background:"#e3b341"}}/>D</span><span><i style={{background:"#e07a2c"}}/>E</span><span><i style={{background:"#e1541f"}}/>F</span><span><i style={{background:"#c1121f"}}/>G</span><small>Classe DPE issue de la BDNB, recherchée pour chaque bâtiment sélectionné. Peut prendre quelques instants sur tout le département.</small></div>}
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="elec" && <div className="mos-mini-legend"><strong>Consommation électrique estimée</strong><span><i style={{background:"#3cb44a"}}/>Faible</span><span><i style={{background:"#a8c936"}}/>Modérée</span><span><i style={{background:"#e3b341"}}/>Élevée</span><span><i style={{background:"#e1541f"}}/>Très élevée</span><span><i style={{background:"#c1121f"}}/>Extrême</span><small>Échelle indicative à partir des données BDNB disponibles pour ce bâtiment.</small></div>}
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="risks" && <div className="mos-mini-legend"><strong>Risques des bâtiments publics</strong><span><i style={{background:"#687787"}}/>Aucun risque recensé</span><span><i style={{background:"#e3b341"}}/>1 risque</span><span><i style={{background:"#e1541f"}}/>2-3 risques</span><span><i style={{background:"#c1121f"}}/>4 risques ou plus</span><small>Risques Géorisques interrogés au centre de chaque équipement public sélectionné.</small></div>}
-            <p className="public-land-note"><i/>Catégorisation par nature/usage IGN BD TOPO, affichée à partir du niveau de zoom 12 (cadrez une commune) ; destination précise, DPE et consommation électrique complétés depuis la BDNB.</p>
+            <p className="public-land-note"><i/>Équipements issus de la Base Permanente des Équipements (INSEE, Île-de-France) pour la commune sélectionnée ; DPE et consommation électrique complétés depuis la BDNB.</p>
           </section>
           <details className="urban-services"><summary><span><strong>Sources publiques</strong><small>{Object.values(services).filter((state)=>state==="online").length}/8 services disponibles</small></span><b>{Object.values(services).every((state)=>state==="online")?"Connecté":"Vérification"}</b></summary><div className="urban-service-grid">{Object.entries(services).map(([name,state])=><span key={name}><i className={state}/><strong>{name}</strong><small>{state==="online"?"Disponible":state==="error"?"Indisponible":"Connexion…"}</small></span>)}</div></details>
         </aside>
