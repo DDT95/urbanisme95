@@ -79,24 +79,22 @@ function supFamily(code:string){ if(/^AC|^AR|^INT|^JS/.test(code))return "Patrim
 function supColor(feature:any){ const colors:Record<string,string>={"Patrimoine et équipements":"#6f4c9b",Risques:"#e1000f",Eau:"#0098d8","Réseaux et énergie":"#e3a008",Transports:"#0053b3","Agriculture et environnement":"#18753c","Autres servitudes":"#687787"}; return colors[supFamily(supCode(feature))]; }
 function supTitle(feature:any){ const p=feature?.properties||{}, code=supCode(feature); return firstValue(p,["nomsuplitt","nomreg"],"") || supDescription(code); }
 function escapeHtml(value:unknown){ return String(value??"").replace(/[&<>"']/g,(character)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[character]||character)); }
-type PublicBuildingCategory = "townhall"|"education"|"health"|"sport"|"culture"|"religious"|"security";
+type PublicBuildingCategory = "townhall"|"education"|"health"|"sport"|"religious"|"security";
 const publicBuildingCategoryFilters: Record<PublicBuildingCategory,{natures?:string[];usages?:string[]}> = {
   townhall: { natures:["Mairie","Préfecture","Sous-préfecture","Hôtel de région","Hôtel de département"] },
-  education: { usages:["Enseignement"] },
-  health: { natures:["Établissement de santé"], usages:["Santé"] },
+  education: { usages:["Science et enseignement"] },
+  health: { natures:["Établissement de santé"] },
   sport: { usages:["Sportif"] },
-  culture: { natures:["Service culturel"], usages:["Culturel"] },
   religious: { usages:["Religieux"] },
-  security: { natures:["Établissement pénitentiaire","Service de secours"] },
+  security: { natures:["Établissement pénitentiaire"] },
 };
 const publicBuildingCategoryInfo: Record<PublicBuildingCategory,{label:string;color:string;description:string}> = {
   townhall:{ label:"Mairies et administrations", color:"#000091", description:"Mairies, préfecture, sous-préfecture, hôtels de région et de département" },
-  education:{ label:"Écoles et enseignement", color:"#18753c", description:"Écoles, collèges, lycées et enseignement supérieur" },
+  education:{ label:"Écoles et enseignement", color:"#18753c", description:"Écoles, collèges, lycées et enseignement supérieur (usage « Science et enseignement » BD TOPO)" },
   health:{ label:"Santé", color:"#c1121f", description:"Hôpitaux, cliniques et établissements de santé" },
   sport:{ label:"Sport (gymnases, piscines…)", color:"#e07a2c", description:"Équipements sportifs, en usage principal ou secondaire" },
-  culture:{ label:"Culture et vie sociale", color:"#6f4c9b", description:"Équipements culturels et centres de vie sociale" },
   religious:{ label:"Lieux de culte", color:"#a05a9c", description:"Édifices religieux" },
-  security:{ label:"Sécurité et secours", color:"#e3b341", description:"Casernes, établissements pénitentiaires, services de secours" },
+  security:{ label:"Sécurité et secours", color:"#e3b341", description:"Établissements pénitentiaires (la BD TOPO n’identifie pas séparément casernes et commissariats)" },
 };
 const publicBuildingCategoryOrder = Object.keys(publicBuildingCategoryInfo) as PublicBuildingCategory[];
 function publicBuildingCategoryOf(feature:any):PublicBuildingCategory|null{
@@ -189,7 +187,7 @@ export default function UrbanismePage() {
   const publicLandFilterRef = useRef<"state"|"all">("state");
   const [publicDataReady, setPublicDataReady] = useState(false);
   const [layerLoading, setLayerLoading] = useState({ buildings:false, mos:false, plu:false, servitudes:false, publicLand:false, publicBuildings:false, dpePublic:false, publicRisks:false });
-  const [publicBuildingCats, setPublicBuildingCats] = useState<Record<PublicBuildingCategory, boolean>>({ townhall:false, education:false, health:false, sport:false, culture:false, religious:false, security:false });
+  const [publicBuildingCats, setPublicBuildingCats] = useState<Record<PublicBuildingCategory, boolean>>({ townhall:false, education:false, health:false, sport:false, religious:false, security:false });
   const publicBuildingCatsRef = useRef(publicBuildingCats);
   useEffect(() => { publicBuildingCatsRef.current = publicBuildingCats; }, [publicBuildingCats]);
   const [buildingInfoMode, setBuildingInfoMode] = useState<"category"|"dpe"|"elec"|"risks">("category");
@@ -218,10 +216,12 @@ export default function UrbanismePage() {
       });
       parcelTilesRef.current = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=PCI%20vecteur&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png", {
         className: "parcel-tiles", minZoom: 11, maxZoom: 19, opacity: .82, attribution: "© IGN · DGFiP",
-      }).addTo(map);
+      });
       buildingTilesRef.current = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=BUILDINGS.BUILDINGS&STYLE=normal&TILEMATRIXSET=PM_6_18&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png", {
         className: "building-tiles", minZoom: 11, maxZoom: 18, opacity: .95, attribution: "© IGN · BD TOPO",
-      }).addTo(map);
+      });
+      if (layersStateRef.current.parcels) parcelTilesRef.current.addTo(map);
+      if (layersStateRef.current.buildings) buildingTilesRef.current.addTo(map);
       pluOverviewLayerRef.current=L.tileLayer.wms("https://data.geopf.fr/wms-v/ows",{layers:"document",format:"image/png",transparent:true,version:"1.3.0",opacity:.72,attribution:"© Géoportail de l’urbanisme"});
       supOverviewLayerRef.current=L.tileLayer.wms("https://data.geopf.fr/wms-v/ows",{layers:"sup",format:"image/png",transparent:true,version:"1.3.0",opacity:.48,attribution:"© Géoportail de l’urbanisme"});
       pluOverviewLayerRef.current.on("loading",()=>setLayerLoading((current)=>({...current,plu:true})));pluOverviewLayerRef.current.on("load",()=>setLayerLoading((current)=>({...current,plu:false})));
@@ -945,6 +945,7 @@ export default function UrbanismePage() {
             <div className="urban-layer-list public-buildings-list">
               {publicBuildingCategoryOrder.map((key) => {const info=publicBuildingCategoryInfo[key];const checked=publicBuildingCats[key];return <button key={key} type="button" role="switch" className="urban-layer-toggle" onClick={() => setPublicBuildingCats((current) => ({...current,[key]:!current[key]}))} aria-checked={checked}><i style={{background:info.color}}/><span><strong>{info.label}</strong><small>{info.description}</small></span><b aria-hidden="true"><em/></b></button>;})}
             </div>
+            {Object.values(publicBuildingCats).some(Boolean) && <p className={`public-buildings-status ${layerLoading.publicBuildings?"loading":""}`}><i/>{layerFeedback}</p>}
             {Object.values(publicBuildingCats).some(Boolean) && <div className="public-buildings-mode"><strong>Que voir sur ces bâtiments ?</strong><div>
               <button type="button" className={buildingInfoMode==="category"?"active":""} onClick={()=>setBuildingInfoMode("category")}>Catégorie</button>
               <button type="button" className={buildingInfoMode==="dpe"?"active":""} onClick={()=>setBuildingInfoMode("dpe")}>DPE (BDNB)</button>
