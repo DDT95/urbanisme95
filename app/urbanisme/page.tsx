@@ -449,18 +449,30 @@ export default function UrbanismePage() {
         const bbox=[bounds.getWest(),bounds.getSouth(),bounds.getEast(),bounds.getNorth(),"EPSG:4326"].join(",");
         const cql=buildPublicBuildingsCql();
         publicBuildingsRequestRef.current?.abort();const controller=new AbortController();publicBuildingsRequestRef.current=controller;
+        const fetchWfsPage = async (extraParams:string) => {
+          const collected:any[]=[]; let offset=0;
+          while(true){
+            const url=`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3%3Abatiment&srsName=EPSG%3A4326&outputFormat=application%2Fjson&COUNT=1000&STARTINDEX=${offset}&${extraParams}`;
+            const response=await fetch(url,{signal:controller.signal});
+            if(!response.ok)throw new Error(`WFS bâtiments publics : réponse ${response.status}`);
+            const page=await response.json();
+            if(!Array.isArray(page.features))throw new Error("Réponse WFS inattendue pour les bâtiments publics");
+            collected.push(...page.features); offset+=page.features.length;
+            setLayerFeedback(`Chargement des bâtiments publics : ${collected.length.toLocaleString("fr-FR")}…`);
+            if(page.features.length<1000||offset>20000)break;
+          }
+          return collected;
+        };
         try{
-          const base=`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3%3Abatiment&srsName=EPSG%3A4326&BBOX=${bbox}&CQL_FILTER=${encodeURIComponent(cql)}`;
-          const hits=await fetch(`${base}&RESULTTYPE=hits`,{signal:controller.signal}).then((response)=>response.text());
-          const total=numberValue(hits.match(/numberMatched="(\d+)"/)?.[1]);
-          const collected:any[]=[];let offset=0;
-          while(offset<total){
-            const response=await fetch(`${base}&outputFormat=application%2Fjson&COUNT=1000&STARTINDEX=${offset}`,{signal:controller.signal});
-            if(!response.ok)throw new Error("Bâtiments publics indisponibles");
-            const page=await response.json();const pageFeatures=page.features||[];
-            collected.push(...pageFeatures);offset+=pageFeatures.length;
-            setLayerFeedback(`Chargement des bâtiments publics : ${collected.length.toLocaleString("fr-FR")} / ${total.toLocaleString("fr-FR")}…`);
-            if(!pageFeatures.length)break;
+          let collected:any[];
+          try{
+            collected=await fetchWfsPage(`BBOX=${bbox}&CQL_FILTER=${encodeURIComponent(cql)}`);
+          }catch(primaryError:any){
+            if(primaryError?.name==="AbortError")return;
+            console.warn("WFS bâtiments publics (BBOX+CQL_FILTER) a échoué, nouvel essai avec l’emprise intégrée au filtre",primaryError);
+            const [west,south,east,north]=bbox.split(",");
+            const spatial=`BBOX(geometrie,${west},${south},${east},${north})`;
+            collected=await fetchWfsPage(`CQL_FILTER=${encodeURIComponent(`${spatial} AND (${cql})`)}`);
           }
           if(controller.signal.aborted)return;
           const dataMap=new Map<string,any>();
@@ -468,11 +480,11 @@ export default function UrbanismePage() {
           publicBuildingsDataRef.current=dataMap;
           publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{renderer:L.canvas({padding:.5}),style:publicBuildingStyle,onEachFeature:bindPublicBuildingTooltip}).addTo(map);
           publicBuildingsLoadedRef.current=true;
-          setLayerFeedback(`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans le Val-d’Oise (BD TOPO).`);
+          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans le Val-d’Oise (BD TOPO).`:"Aucun bâtiment public retourné par la BD TOPO pour les catégories sélectionnées. Réessayez ou signalez le problème.");
           parcelTilesRef.current?.bringToFront(); buildingTilesRef.current?.bringToFront();
           if(buildingInfoModeRef.current==="dpe"||buildingInfoModeRef.current==="elec")ensureDpeElecEnrichment();
           if(buildingInfoModeRef.current==="risks")ensureRisksEnrichment();
-        }catch(error:any){ if(error?.name!=="AbortError"){console.warn("Bâtiments publics indisponibles",error);setLayerFeedback("La BD TOPO ne répond pas pour les bâtiments publics.");} }
+        }catch(error:any){ if(error?.name!=="AbortError"){console.warn("Bâtiments publics indisponibles",error);setLayerFeedback(`La BD TOPO ne répond pas pour les bâtiments publics (${error?.message||"erreur réseau"}).`);} }
         finally{ publicBuildingsLoadingRef.current=false;if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
       };
       const adaptLayerReadability=()=>{const zoom=map.getZoom();parcelTilesRef.current?.setOpacity(zoom>=15?.92:zoom>=13?.68:.48);buildingTilesRef.current?.setOpacity(zoom>=16?.9:zoom>=14?.62:.38);if(mosLayerRef.current?.setStyle)mosLayerRef.current.setStyle((feature:any)=>({color:mosColor(numberValue(feature?.properties?.mos2025)),weight:zoom>=14?.8:.5,fillColor:mosColor(numberValue(feature?.properties?.mos2025)),fillOpacity:zoom>=14?.52:.34}));if(pluTilesRef.current?.setStyle)pluTilesRef.current.setStyle((feature:any)=>({color:zoneColor(feature),weight:zoom>=14?1.5:1,fillColor:zoneColor(feature),fillOpacity:zoom>=14?.26:.18}));if(supTilesRef.current?.setStyle)supTilesRef.current.setStyle((feature:any)=>({color:supColor(feature),weight:zoom>=14?2.5:1.7,fillColor:supColor(feature),fillOpacity:zoom>=14?.10:.055,dashArray:feature.geometry?.type?.includes("Polygon")?"7 5":undefined}));};
@@ -923,7 +935,7 @@ export default function UrbanismePage() {
             {layers.servitudes && <div className="sup-family-legend"><strong>Familles de servitudes</strong><span><i style={{background:"#e1000f"}}/>Risques</span><span><i style={{background:"#0098d8"}}/>Eau</span><span><i style={{background:"#e3a008"}}/>Réseaux et énergie</span><span><i style={{background:"#0053b3"}}/>Transports</span><span><i style={{background:"#6f4c9b"}}/>Patrimoine</span><span><i style={{background:"#18753c"}}/>Environnement</span><small>Survolez une zone, une ligne ou un point pour connaître la catégorie, l’objet et l’identifiant GPU.</small></div>}
           </section>
           <section className="urban-layer-panel urban-public-panel" aria-labelledby="urban-public-title">
-            <div className="urban-layer-head"><span><small>Foncier &amp; bâtiments publics</small><strong id="urban-public-title">État, collectivités et équipements publics</strong></span><b>Niveau {mapZoom}</b></div>
+            <div className="urban-layer-head"><span><small>Foncier &amp; bâtiments publics</small><strong id="urban-public-title">État, collectivités et équipements publics</strong></span></div>
             <div className="urban-layer-list">
               {(() => {const waiting=layerLoading.publicLand;return <button type="button" role="switch" className={`urban-layer-toggle ${waiting?"is-loading":""}`} onClick={() => toggleLayer("publicLand")} aria-checked={layers.publicLand} aria-busy={waiting}><i style={{background:"#008941"}}/><span><strong>Foncier public{waiting&&<em className="layer-spinner" aria-hidden="true"/>}</strong><small>{waiting?"Chargement des données…":"État, collectivités, HLM et établissements"}</small></span><b aria-hidden="true"><em/></b></button>;})()}
             </div>
@@ -949,7 +961,7 @@ export default function UrbanismePage() {
         <section className="urban-map-wrap">
           {loadingLabels.length>0&&<div className="map-data-loader" role="status" aria-live="polite"><i/><span><strong>Chargement de la carte</strong><small>{loadingLabels.join(" · ")}</small></span></div>}
           {layers.mos&&<aside className="mos-map-legend" aria-label="Légende du MOS 2025"><strong>MOS 2025 · occupation du sol</strong><div><span><i style={{background:"#18753c"}}/>Nature et forêts</span><span><i style={{background:"#e3b341"}}/>Agriculture</span><span><i style={{background:"#0098d8"}}/>Eau</span><span><i style={{background:"#62b467"}}/>Espaces ouverts</span><span><i style={{background:"#e07a9a"}}/>Habitat</span><span><i style={{background:"#a05a9c"}}/>Activités</span><span><i style={{background:"#5576b9"}}/>Équipements</span><span><i style={{background:"#737b87"}}/>Transports</span></div><small>Survolez une surface pour afficher son usage détaillé et son évolution depuis 2021.</small></aside>}
-          <div className={`map-guidance ${mapZoom >= 11 ? "ready" : "zoom-required"}`} role="status" aria-live="polite"><strong>{mapZoom >= 11 ? "Explorez les données affichées" : "Zoomez pour afficher les parcelles"}</strong><span>{mapZoom >= 11 ? layerFeedback : "Utilisez les boutons + / −, la molette de la souris ou pincez l’écran. Dès le niveau 11, les couches activées apparaissent sur tout le Val-d’Oise ; le détail précis et le clic sur une parcelle arrivent au niveau 13."}</span></div>
+          {(() => { const earlyReady = mapZoom >= 11 || layers.publicLand || Object.values(publicBuildingCats).some(Boolean); return <div className={`map-guidance ${earlyReady ? "ready" : "zoom-required"}`} role="status" aria-live="polite"><strong>{earlyReady ? "Explorez les données affichées" : "Zoomez pour afficher les parcelles"}</strong><span>{earlyReady ? layerFeedback : "Utilisez les boutons + / −, la molette de la souris ou pincez l’écran. Dès le niveau 11, les couches activées apparaissent sur tout le Val-d’Oise ; le détail précis et le clic sur une parcelle arrivent au niveau 13."}</span></div>; })()}
           <div className="urban-legend">{result && <span><i className="parcel"/>Sélection</span>}{layers.buildings && <span><i className="building"/>Bâtiments</span>}{layers.mos && <span><i className="mos"/>MOS</span>}{layers.plu && <span><i className="zone"/>PLU</span>}{layers.servitudes && <span><i className="sup"/>SUP</span>}{layers.publicLand && <span><i className="public"/>Foncier public</span>}</div><div ref={mapNode} className="urban-map" aria-label="Carte interactive d’urbanisme à la parcelle" />
         </section>
       </div>
