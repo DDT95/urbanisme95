@@ -491,11 +491,15 @@ export default function UrbanismePage() {
         publicBuildingsRequestRef.current?.abort();const controller=new AbortController();publicBuildingsRequestRef.current=controller;
         try{
           const bboxParam=`${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
-          const url=`https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/bpe23-nettoye/records?geofilter.bbox=${encodeURIComponent(bboxParam)}&refine.dep=95&limit=100`;
+          const url=`https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/bpe23-nettoye/records?geofilter.bbox=${encodeURIComponent(bboxParam)}&limit=100`;
           const response=await fetch(url,{signal:controller.signal});
           if(!response.ok)throw new Error(`réponse ${response.status}`);
           const data=await response.json();
           const records:any[]=Array.isArray(data?.results)?data.results:Array.isArray(data?.records)?data.records.map((r:any)=>({...r.fields,...r})):[];
+          console.log("[BPE debug] URL interrogée :",url);
+          console.log("[BPE debug] total_count renvoyé :",data?.total_count);
+          console.log("[BPE debug] premier enregistrement brut :",records[0]);
+          console.log("[BPE debug] tous les champs texte du premier enregistrement :",records[0]&&Object.fromEntries(Object.entries(records[0]).filter(([,v])=>typeof v==="string")));
           if(controller.signal.aborted)return;
           const dataMap=new Map<string,any>();
           records.forEach((record:any,index:number)=>{
