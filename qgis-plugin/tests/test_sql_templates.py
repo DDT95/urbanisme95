@@ -103,6 +103,27 @@ class TestSqlTemplates(unittest.TestCase):
         )
         self.assertEqual(refs["gpa"], '"r_drieat"."gpa_annexe_1"')
 
+    def test_referentiels_2018_2020_use_national_proprietaire_schema(self):
+        # Ces millésimes n'ont pas la table propriétaire non anonymisée au
+        # niveau départemental : on retombe sur le schéma national.
+        for year in (2018, 2019, 2020):
+            refs = tpl.referentiels(year)
+            self.assertEqual(
+                refs["parcelle"], '"x_ff{y}_dep"."d95_fftp_{y}_pnb10_parcelle"'.format(y=year)
+            )
+            self.assertEqual(
+                refs["proprietaire"],
+                '"x_ff{y}"."fftp_{y}_proprietaire_droit_non_ano"'.format(y=year),
+            )
+
+    def test_referentiels_2021_2023_use_departmental_proprietaire_schema(self):
+        for year in (2021, 2022, 2023):
+            refs = tpl.referentiels(year)
+            self.assertEqual(
+                refs["proprietaire"],
+                '"x_ff{y}_dep"."d95_fftp_{y}_proprietaire_droit_non_ano"'.format(y=year),
+            )
+
     def test_referentiels_rejects_invalid_millesime(self):
         with self.assertRaises(InvalidIdentifierError):
             tpl.referentiels("abcd")
@@ -112,7 +133,7 @@ class TestSqlTemplates(unittest.TestCase):
         # millésime non explicitement ajouté à REFERENTIELS_PAR_MILLESIME
         # doit échouer clairement plutôt que deviner un nom de table.
         with self.assertRaises(InvalidIdentifierError):
-            tpl.referentiels(2019)
+            tpl.referentiels(2017)
 
     def test_referentiels_2025_matches_information_schema(self):
         # Confirmé via information_schema.tables sur la base réelle : un

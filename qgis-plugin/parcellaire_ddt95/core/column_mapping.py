@@ -29,6 +29,50 @@ GPA_JOIN_COLUMN = "cleSIG"
 # confirmé (requête de production DDT95). Ajoutez une entrée par nouveau
 # millésime au lieu de déduire le nom automatiquement.
 REFERENTIELS_PAR_MILLESIME = {
+    # 2018-2020 : parcelle/suf disponibles au niveau départemental (schéma
+    # x_ffAAAA_dep, tables d95_...), mais PAS la table propriétaire non
+    # anonymisée à ce niveau-là ces années-là : on utilise donc le schéma
+    # national x_ffAAAA (non préfixé d95_) pour "proprietaire" uniquement,
+    # ce qui reste correct (la jointure se fait par idprocpte, la
+    # restriction au 95 vient déjà de la table parcelle).
+    2018: {
+        "parcelle": ("x_ff2018_dep", "d95_fftp_2018_pnb10_parcelle"),
+        "suf": ("x_ff2018_dep", "d95_fftp_2018_pnb21_suf"),
+        "proprietaire": ("x_ff2018", "fftp_2018_proprietaire_droit_non_ano"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
+    2019: {
+        "parcelle": ("x_ff2019_dep", "d95_fftp_2019_pnb10_parcelle"),
+        "suf": ("x_ff2019_dep", "d95_fftp_2019_pnb21_suf"),
+        "proprietaire": ("x_ff2019", "fftp_2019_proprietaire_droit_non_ano"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
+    2020: {
+        "parcelle": ("x_ff2020_dep", "d95_fftp_2020_pnb10_parcelle"),
+        "suf": ("x_ff2020_dep", "d95_fftp_2020_pnb21_suf"),
+        "proprietaire": ("x_ff2020", "fftp_2020_proprietaire_droit_non_ano"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
+    # 2021-2023 : la table propriétaire non anonymisée existe cette fois
+    # directement dans le schéma départemental x_ffAAAA_dep.
+    2021: {
+        "parcelle": ("x_ff2021_dep", "d95_fftp_2021_pnb10_parcelle"),
+        "suf": ("x_ff2021_dep", "d95_fftp_2021_pnb21_suf"),
+        "proprietaire": ("x_ff2021_dep", "d95_fftp_2021_proprietaire_droit_non_ano"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
+    2022: {
+        "parcelle": ("x_ff2022_dep", "d95_fftp_2022_pnb10_parcelle"),
+        "suf": ("x_ff2022_dep", "d95_fftp_2022_pnb21_suf"),
+        "proprietaire": ("x_ff2022_dep", "d95_fftp_2022_proprietaire_droit_non_ano"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
+    2023: {
+        "parcelle": ("x_ff2023_dep", "d95_fftp_2023_pnb10_parcelle"),
+        "suf": ("x_ff2023_dep", "d95_fftp_2023_pnb21_suf"),
+        "proprietaire": ("x_ff2023_dep", "d95_fftp_2023_proprietaire_droit_non_ano"),
+        "gpa": ("r_drieat", "gpa_annexe_1"),
+    },
     2024: {
         "parcelle": ("x_ff2024_dep", "d95_fftp_2024_pnb10_parcelle"),
         "suf": ("x_ff2024_dep", "d95_fftp_2024_pnb21_suf"),
