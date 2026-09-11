@@ -114,15 +114,16 @@ const bpeCategoryKeywords: Record<PublicBuildingCategory,string[]> = {
   religious:["église","eglise","chapelle","temple","synagogue","mosquée","mosquee","paroisse","culte"],
   security:["gendarmerie","police","commissariat","caserne","pompier","sécurité civile","securite civile","pénitentiaire","penitentiaire"],
 };
+const bpeNonDescriptiveFieldPattern = /adr|voie|rue|com$|commune|c_com|nom_com|cp$|postal|code|insee|siret|siren|dep$|reg$|epci|geo/i;
 function bpeCategoryOf(record:Record<string,unknown>):PublicBuildingCategory|null{
-  const text=Object.values(record).filter((value)=>typeof value==="string").join(" | ").toLocaleLowerCase("fr");
+  const text=Object.entries(record).filter(([key,value])=>typeof value==="string"&&!bpeNonDescriptiveFieldPattern.test(key)).map(([,value])=>value).join(" | ").toLocaleLowerCase("fr");
   for(const key of publicBuildingCategoryOrder){ if(bpeCategoryKeywords[key].some((keyword)=>text.includes(keyword))) return key; }
   return null;
 }
 function bpeLabel(record:Record<string,unknown>):string{
   const candidates=["lib_equip","libelle","lib_type_equip","nom","nom_equip","type_equipement_libelle","denomination"];
   for(const key of candidates) if(typeof record[key]==="string" && record[key]) return record[key] as string;
-  const firstString=Object.entries(record).find(([key,value])=>typeof value==="string"&&(value as string).length>2&&!/^\d+$/.test(value as string));
+  const firstString=Object.entries(record).find(([key,value])=>typeof value==="string"&&(value as string).length>2&&!/^\d+$/.test(value as string)&&!bpeNonDescriptiveFieldPattern.test(key));
   return firstString?String(firstString[1]):"Équipement (BPE)";
 }
 function bpeCoordinates(record:Record<string,unknown>):[number,number]|null{
@@ -372,7 +373,7 @@ export default function UrbanismePage() {
         const category=feature.properties?._category as PublicBuildingCategory|null;
         const visible=Boolean(category&&publicBuildingCatsRef.current[category]);
         const color=publicBuildingColor(feature);
-        return { color, weight:visible?2:0, opacity:visible?1:0, fillColor:color, fillOpacity:visible?.6:0 };
+        return { color:"#ffffff", weight:visible?2:0, opacity:visible?1:0, fillColor:color, fillOpacity:visible?.92:0 };
       };
       const applyPublicBuildingsStyle = () => {
         if(publicBuildingsLayerRef.current?.setStyle)publicBuildingsLayerRef.current.setStyle(publicBuildingStyle);
@@ -473,8 +474,9 @@ export default function UrbanismePage() {
           const dataMap=new Map<string,any>();
           collected.forEach((feature:any)=>{const category=publicBuildingCategoryOf(feature);if(!category||!publicBuildingCatsRef.current[category])return;const id=String(feature.id||feature.properties?.cleabs||`${category}-${dataMap.size}`);dataMap.set(id,{...feature,properties:{...feature.properties,_category:category}});});
           publicBuildingsDataRef.current=dataMap;
+          const markerFeatures=[...dataMap.values()].map((feature:any)=>({...feature,geometry:{type:"Point",coordinates:geometryCenter(feature.geometry)}}));
           const previous=publicBuildingsLayerRef.current;
-          publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{renderer:L.canvas({padding:.5}),style:publicBuildingStyle,onEachFeature:bindPublicBuildingTooltip}).addTo(map);
+          publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:markerFeatures},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:8,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
           if(previous&&map.hasLayer(previous))map.removeLayer(previous);
           setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans cette vue (BD TOPO).`:`Aucun bâtiment public trouvé dans cette vue parmi les ${collected.length.toLocaleString("fr-FR")} bâtiments BD TOPO analysés. Essayez une autre zone.`);
           parcelTilesRef.current?.bringToFront(); buildingTilesRef.current?.bringToFront();
@@ -504,7 +506,7 @@ export default function UrbanismePage() {
           });
           publicBuildingsDataRef.current=dataMap;
           const previous=publicBuildingsLayerRef.current;
-          publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:7,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
+          publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:8,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
           if(previous&&map.hasLayer(previous))map.removeLayer(previous);
           setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans cette vue (BPE, expérimental).`:`Aucun équipement retenu dans cette vue parmi les ${records.length.toLocaleString("fr-FR")} enregistrements BPE reçus (source expérimentale, non garantie).`);
         }catch(error:any){ if(error?.name!=="AbortError"){console.warn("BPE indisponible",error);setLayerFeedback(`La BPE (Île-de-France) ne répond pas comme attendu (${error?.message||"erreur réseau"}) — source expérimentale, essayez « BD TOPO ».`);} }
