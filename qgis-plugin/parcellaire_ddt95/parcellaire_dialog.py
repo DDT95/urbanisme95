@@ -15,6 +15,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .core import generator
+from .core.column_mapping import REFERENTIELS_PAR_MILLESIME
 from .core.csv_import import CsvFormatError
 from .core.db import DbError, list_postgres_connections
 from .core.identifiers import InvalidIdentifierError
@@ -72,8 +73,8 @@ class ParcellaireDialog(QDialog):
         form.addRow("Commande", self.commande_edit)
 
         self.millesime_spin = QSpinBox()
-        self.millesime_spin.setRange(2000, 2100)
-        self.millesime_spin.setValue(2025)
+        self.millesime_spin.setRange(min(REFERENTIELS_PAR_MILLESIME), max(REFERENTIELS_PAR_MILLESIME))
+        self.millesime_spin.setValue(max(REFERENTIELS_PAR_MILLESIME))
         form.addRow("Millésime des fichiers fonciers", self.millesime_spin)
 
         layout.addLayout(form)
