@@ -73,7 +73,7 @@ class ParcellaireDialog(QDialog):
 
         self.millesime_spin = QSpinBox()
         self.millesime_spin.setRange(2000, 2100)
-        self.millesime_spin.setValue(2024)
+        self.millesime_spin.setValue(2025)
         form.addRow("Millésime des fichiers fonciers", self.millesime_spin)
 
         layout.addLayout(form)
