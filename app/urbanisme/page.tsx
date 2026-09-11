@@ -139,6 +139,7 @@ function bpeCoordinates(record:Record<string,unknown>):[number,number]|null{
   if(latKey&&lonKey){ const lat=Number(record[latKey]),lon=Number(record[lonKey]); if(Number.isFinite(lat)&&Number.isFinite(lon)) return [lon,lat]; }
   return null;
 }
+function normalizeCommuneName(name:string){ return name.normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase(); }
 function dpeColor(classe:string){ return ({A:"#008941",B:"#3cb44a",C:"#a8c936",D:"#e3b341",E:"#e07a2c",F:"#e1541f",G:"#c1121f"} as Record<string,string>)[String(classe||"").toUpperCase()] || "#687787"; }
 function publicRiskColor(count:number){ if(count>=4)return "#c1121f"; if(count>=2)return "#e1541f"; if(count>=1)return "#e3b341"; return "#687787"; }
 function elecConsumptionValue(entry:Record<string,unknown>):number|null{
@@ -203,6 +204,8 @@ export default function UrbanismePage() {
   const [communeQuery, setCommuneQuery] = useState("");
   const [communeSuggestionsOpen, setCommuneSuggestionsOpen] = useState(false);
   const [activeCommune, setActiveCommune] = useState("");
+  const activeCommuneRef = useRef("");
+  useEffect(() => { activeCommuneRef.current = activeCommune; }, [activeCommune]);
   const [layers, setLayers] = useState({ parcels: false, buildings: false, mos: false, plu: false, servitudes: false, publicLand: false });
   const [basemap, setBasemap] = useState<"plan"|"aerial">("plan");
   const [publicLandFilter, setPublicLandFilter] = useState<"state"|"all">("state");
@@ -486,20 +489,34 @@ export default function UrbanismePage() {
         finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
       };
       const refreshPublicBuildingsBpe = async () => {
+        const commune=activeCommuneRef.current;
+        if(!commune){
+          if(publicBuildingsLayerRef.current&&map.hasLayer(publicBuildingsLayerRef.current))map.removeLayer(publicBuildingsLayerRef.current);
+          setLayerFeedback("La source BPE interroge par commune : choisissez d’abord une commune (recherche ou sélection ci-dessus).");
+          return;
+        }
         setLayerLoading((current)=>({...current,publicBuildings:true}));
-        const bounds=map.getBounds();
         publicBuildingsRequestRef.current?.abort();const controller=new AbortController();publicBuildingsRequestRef.current=controller;
         try{
-          const bboxParam=`${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
-          const url=`https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/bpe23-nettoye/records?geofilter.bbox=${encodeURIComponent(bboxParam)}&limit=100`;
-          const response=await fetch(url,{signal:controller.signal});
-          if(!response.ok)throw new Error(`réponse ${response.status}`);
-          const data=await response.json();
-          const records:any[]=Array.isArray(data?.results)?data.results:Array.isArray(data?.records)?data.records.map((r:any)=>({...r.fields,...r})):[];
-          console.log("[BPE debug] URL interrogée :",url);
-          console.log("[BPE debug] total_count renvoyé :",data?.total_count);
-          console.log("[BPE debug] premier enregistrement brut :",records[0]);
-          console.log("[BPE debug] tous les champs texte du premier enregistrement :",records[0]&&Object.fromEntries(Object.entries(records[0]).filter(([,v])=>typeof v==="string")));
+          const where=`libcom="${normalizeCommuneName(commune).replace(/"/g,'\\"')}"`;
+          const base=`https://data.iledefrance.fr/api/explore/v2.1/catalog/datasets/bpe23-nettoye/records?where=${encodeURIComponent(where)}&limit=100`;
+          const collected:any[]=[]; let offset=0; let totalCount=0;
+          while(true){
+            const response=await fetch(`${base}&offset=${offset}`,{signal:controller.signal});
+            if(!response.ok)throw new Error(`réponse ${response.status}`);
+            const data=await response.json();
+            totalCount=Number(data?.total_count)||0;
+            const page:any[]=Array.isArray(data?.results)?data.results:Array.isArray(data?.records)?data.records.map((r:any)=>({...r.fields,...r})):[];
+            if(offset===0){
+              console.log("[BPE debug] URL interrogée :",`${base}&offset=0`);
+              console.log("[BPE debug] total_count renvoyé :",totalCount);
+              console.log("[BPE debug] premier enregistrement brut :",page[0]);
+              console.log("[BPE debug] coordonnées détectées sur le premier enregistrement :",page[0]&&bpeCoordinates(page[0]));
+            }
+            collected.push(...page); offset+=page.length;
+            if(page.length<100||offset>=totalCount||offset>1000)break;
+          }
+          const records=collected;
           if(controller.signal.aborted)return;
           const dataMap=new Map<string,any>();
           records.forEach((record:any,index:number)=>{
@@ -512,7 +529,7 @@ export default function UrbanismePage() {
           const previous=publicBuildingsLayerRef.current;
           publicBuildingsLayerRef.current=L.geoJSON({type:"FeatureCollection",features:[...dataMap.values()]},{pointToLayer:(feature:any,latlng:any)=>{const style=publicBuildingStyle(feature);return L.circleMarker(latlng,{radius:8,...style});},onEachFeature:bindPublicBuildingTooltip}).addTo(map);
           if(previous&&map.hasLayer(previous))map.removeLayer(previous);
-          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés dans cette vue (BPE, expérimental).`:`Aucun équipement retenu dans cette vue parmi les ${records.length.toLocaleString("fr-FR")} enregistrements BPE reçus (source expérimentale, non garantie).`);
+          setLayerFeedback(dataMap.size?`Bâtiments publics : ${dataMap.size.toLocaleString("fr-FR")} équipements identifiés à ${commune} (BPE, expérimental).`:`Aucun équipement retenu à ${commune} parmi les ${records.length.toLocaleString("fr-FR")} enregistrements BPE reçus (source expérimentale, non garantie).`);
         }catch(error:any){ if(error?.name!=="AbortError"){console.warn("BPE indisponible",error);setLayerFeedback(`La BPE (Île-de-France) ne répond pas comme attendu (${error?.message||"erreur réseau"}) — source expérimentale, essayez « BD TOPO ».`);} }
         finally{ if(publicBuildingsRequestRef.current===controller)setLayerLoading((current)=>({...current,publicBuildings:false})); }
       };
