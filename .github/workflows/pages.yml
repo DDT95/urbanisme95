@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * 1"
 
 permissions:
   contents: read
@@ -27,6 +29,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Actualiser les données Docurba du Val-d’Oise
+        run: npm run data:docurba
       - run: npm run build:github
       - run: cp dist-github/index.html dist-github/404.html
       - uses: actions/configure-pages@v5

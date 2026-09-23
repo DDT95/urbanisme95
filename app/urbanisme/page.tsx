@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 type FeatureCollection = { type: "FeatureCollection"; features: any[] };
 type AddressResult = { label: string; city?: string; citycode?: string; postcode?: string; coordinates: [number, number] };
 type ParcelResult = { address: string; addressLabel: string; commune: string; codeInsee: string; parcel?: any; zones: any[]; servitudes: any[]; risks: any[]; buildings: any[]; publicLand?: [string,string,string]; mos?: { mos2021?: number; mos2025?: number; surface?: number }; mutations: any[] };
+type DocurbaRecord = { codeInsee:string; commune:string; epci:string; collectivitePorteuse:string; competence:string; etat:string; etatDetaille:string; documentOpposable:string; procedureEnCours:string; documentEnCours:string; datePrescription:string; dateArret:string; dateApprobation:string; dateExecutoire:string; pluih:boolean; pluiValantScot:boolean; objets:string };
 
 const emptyCollection: FeatureCollection = { type: "FeatureCollection", features: [] };
 
@@ -133,6 +134,7 @@ function elecColor(value:number){ if(value>=200)return "#c1121f"; if(value>=120)
 function mutationParams(idu:string){ const commune=idu.slice(0,5), sectionPrefixee=idu.slice(5,10); return commune.length===5 && sectionPrefixee.length===5 ? { commune, sectionPrefixee } : null; }
 function formatEuro(value:unknown){ const amount=numberValue(value); return amount ? new Intl.NumberFormat("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(amount) : "Non renseignée"; }
 function formatMutationDate(value:unknown){ const date=new Date(String(value||"")); return Number.isNaN(date.getTime()) ? "Date inconnue" : date.toLocaleDateString("fr-FR"); }
+function formatDocurbaDate(value:string){ if(!value)return "Non renseignée"; const date=new Date(`${value}T12:00:00`); return Number.isNaN(date.getTime())?value:date.toLocaleDateString("fr-FR"); }
 function mutationColor(nature:string){ const label=String(nature||"").toLowerCase(); if(label.includes("vente"))return "#000091"; if(label.includes("échange")||label.includes("echange"))return "#6f4c9b"; if(label.includes("adjudication"))return "#c1121f"; if(label.includes("donation")||label.includes("partage"))return "#18753c"; return "#687787"; }
 function hexToRgb(hex:string):[number,number,number]{ const clean=hex.replace("#",""); return [parseInt(clean.slice(0,2),16),parseInt(clean.slice(2,4),16),parseInt(clean.slice(4,6),16)]; }
 function matchParcelPattern(query:string){
@@ -187,6 +189,8 @@ export default function UrbanismePage() {
   const [communeQuery, setCommuneQuery] = useState("");
   const [communeSuggestionsOpen, setCommuneSuggestionsOpen] = useState(false);
   const [activeCommune, setActiveCommune] = useState("");
+  const [docurbaCommunes, setDocurbaCommunes] = useState<Record<string,DocurbaRecord>>({});
+  const [docurbaUpdatedAt, setDocurbaUpdatedAt] = useState("");
   const activeCommuneRef = useRef("");
   useEffect(() => { activeCommuneRef.current = activeCommune; }, [activeCommune]);
   const [layers, setLayers] = useState({ parcels: false, buildings: false, mos: false, plu: false, servitudes: false, publicLand: false });
@@ -201,13 +205,14 @@ export default function UrbanismePage() {
   const [buildingInfoMode, setBuildingInfoMode] = useState<"category"|"dpe"|"elec"|"risks">("category");
   const buildingInfoModeRef = useRef(buildingInfoMode);
   useEffect(() => { buildingInfoModeRef.current = buildingInfoMode; }, [buildingInfoMode]);
-  const [services, setServices] = useState<Record<string,"checking"|"online"|"error">>({ Adresse:"checking", Cadastre:"checking", Urbanisme:"checking", Risques:"checking", Bâti:"checking", MOS:"checking", Foncier:"checking", Mutations:"checking" });
+  const [services, setServices] = useState<Record<string,"checking"|"online"|"error">>({ Adresse:"checking", Cadastre:"checking", Urbanisme:"checking", Docurba:"checking", Risques:"checking", Bâti:"checking", MOS:"checking", Foncier:"checking", Mutations:"checking" });
   const [message, setMessage] = useState("Recherchez une adresse ou cliquez sur la carte.");
   const layersStateRef = useRef(layers);
   useEffect(() => { layersStateRef.current = layers; }, [layers]);
   useEffect(() => {
     const probes: Record<string,string> = { Adresse:"https://api-adresse.data.gouv.fr/search/?q=Pontoise&limit=1", Cadastre:`https://apicarto.ign.fr/api/cadastre/parcelle?geom=${pointGeometry(2.1,49.05)}`, Urbanisme:`https://apicarto.ign.fr/api/gpu/zone-urba?geom=${pointGeometry(2.1,49.05)}`, Risques:"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon=2.1,49.05", Bâti:"https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/parcelle?parcelle_id=eq.95018000AH0001", MOS:"https://geoweb.iau-idf.fr/agsmap1/rest/services/OPENDATA/OpendataIAU4/MapServer/25/query?f=json&where=1%3D0&returnCountOnly=true", Foncier:`${basePath}/data/foncier-public-95.json`, Mutations:"https://app.dvf.etalab.gouv.fr/api/mutations3/95018/0000A" };
     Object.entries(probes).forEach(([name,url]) => fetch(url).then((response) => setServices((current) => ({...current,[name]:response.ok ? "online" : "error"}))).catch(() => setServices((current) => ({...current,[name]:"error"}))));
+    fetch(`${basePath}/data/docurba-95.json`).then(async(response)=>{if(!response.ok)throw new Error("Docurba indisponible");const data=await response.json();setDocurbaCommunes(data.communes||{});setDocurbaUpdatedAt(data.generatedAt||"");setServices((current)=>({...current,Docurba:"online"}));}).catch(()=>setServices((current)=>({...current,Docurba:"error"})));
   }, []);
 
   useEffect(() => {
@@ -707,6 +712,7 @@ export default function UrbanismePage() {
     const bounds = communeFocusLayerRef.current.getBounds();
     if (bounds.isValid()) { map.setMinZoom(10); map.fitBounds(bounds, { padding: [45,45], maxZoom: 15 }); }
     setActiveCommune(feature.properties?.nom || "Commune choisie");
+    setCommuneCode(code);
     setCommuneQuery(feature.properties?.nom || ""); setCommuneSuggestionsOpen(false);
     setResult(null); setDetailsOpen(false); setMessage("Commune cadrée : cliquez directement sur une parcelle.");
     setLayerFeedback("Vue communale active : vous pouvez prendre du recul sans perdre les couches affichées.");
@@ -899,6 +905,8 @@ export default function UrbanismePage() {
   const maxHeight = Math.max(0, ...(result?.buildings.map((building) => numberValue(building.hauteur_mean)) || []));
   const dwellingCount = result?.buildings.reduce((sum, building) => sum + numberValue(building.nb_log), 0) || 0;
   const dpeClasses = uniqueValues(result?.buildings.map((building) => building.classe_bilan_dpe || (building.classe_conso_energie_arrete_2012 !== "N" ? building.classe_conso_energie_arrete_2012 : null)) || []);
+  const docurba = communeCode ? docurbaCommunes[communeCode] : undefined;
+  const serviceCount = Object.keys(services).length;
   const stateLandByCommune = useMemo(() => {
     if (!publicDataReady || !publicLandDataRef.current) return [] as {code:string;name:string;count:number}[];
     const counts:Record<string,number>={};
@@ -911,7 +919,7 @@ export default function UrbanismePage() {
       <header className="urban-observatory-header">
         <img src={`${basePath}/prefet-val-doise-logo.png`} alt="Préfet du Val-d’Oise — Liberté Égalité Fraternité"/>
         <div><span>Cadastre · urbanisme · foncier · Val-d’Oise</span><h1>Urbanisme à la parcelle</h1><p><strong>Val-d’Oise</strong> · bâti · MOS · PLU · servitudes · risques</p></div>
-        <div className="urban-header-actions"><div className="header-service-state"><i className={Object.values(services).every((state)=>state==="online")?"online":"checking"}/><span><strong>{Object.values(services).filter((state)=>state==="online").length}/8 sources connectées</strong><small>Données publiques actualisées</small></span></div></div>
+        <div className="urban-header-actions"><div className="header-service-state"><i className={Object.values(services).every((state)=>state==="online")?"online":"checking"}/><span><strong>{Object.values(services).filter((state)=>state==="online").length}/{serviceCount} sources connectées</strong><small>Données publiques actualisées</small></span></div></div>
       </header>
       <div className="urban-layout">
         <aside className="urban-panel">
@@ -920,6 +928,21 @@ export default function UrbanismePage() {
           <form className="urban-search" onSubmit={searchAddress}><label htmlFor="urban-address">2 · Cherchez une adresse, une parcelle ou un code INSEE</label><div><input id="urban-address" aria-label="Adresse, référence cadastrale ou code INSEE" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={activeCommune?`Adresse, ou référence cadastrale à ${activeCommune} : AH 0001…`:"Adresse, référence cadastrale ou code INSEE : 95500…"} /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div><small className="urban-search-hint">{activeCommune?<>Référence cadastrale à <strong>{activeCommune}</strong> : section + numéro (ex. « AH 0001 »).</>:<>Saisissez un code INSEE seul (ex. « 95500 ») pour cadrer directement une commune, ou choisissez-la ci-dessus puis indiquez la référence cadastrale (ex. « AH 0001 », ou « 95500 AH 0001 » sans commune choisie).</>}</small></form>
           <div className={`urban-message ${loading ? "loading" : ""}`}><i />{message}</div>
           {(result || query) && !loading && <button className="reset-search" type="button" onClick={resetSearch}><span aria-hidden="true">↺</span> Nouvelle recherche</button>}
+          {activeCommune && <section className={`docurba-card ${docurba?.procedureEnCours?"has-procedure":""}`} aria-labelledby="docurba-title">
+            <div className="docurba-card-head"><span><small>Document d’urbanisme</small><strong id="docurba-title">Situation Docurba</strong></span><b>{docurba?.etat||"Donnée indisponible"}</b></div>
+            {docurba ? <>
+              <div className="docurba-primary"><small>Document opposable</small><strong>{docurba.documentOpposable||"Non renseigné"}</strong><span>{docurba.etatDetaille||docurba.etat}</span></div>
+              <dl>
+                <div><dt>Compétence</dt><dd>{docurba.collectivitePorteuse||activeCommune}</dd></div>
+                <div><dt>Intercommunalité</dt><dd>{docurba.epci||"Non renseignée"}</dd></div>
+                <div><dt>Approbation</dt><dd>{formatDocurbaDate(docurba.dateApprobation)}</dd></div>
+                {docurba.dateExecutoire&&<div><dt>Exécutoire</dt><dd>{formatDocurbaDate(docurba.dateExecutoire)}</dd></div>}
+              </dl>
+              {docurba.procedureEnCours&&<div className="docurba-procedure"><small>Procédure en cours</small><strong>{[docurba.documentEnCours,docurba.procedureEnCours].filter(Boolean).join(" · ")}</strong><span>Prescrite le {formatDocurbaDate(docurba.datePrescription)}{docurba.dateArret?` · arrêtée le ${formatDocurbaDate(docurba.dateArret)}`:""}</span>{docurba.objets&&<em>{docurba.objets}</em>}</div>}
+              {(docurba.pluih||docurba.pluiValantScot)&&<div className="docurba-tags">{docurba.pluih&&<span>PLUiH</span>}{docurba.pluiValantScot&&<span>PLUi valant SCoT</span>}</div>}
+              <p>Source : Docurba{docurbaUpdatedAt?` · extraction du ${new Date(docurbaUpdatedAt).toLocaleDateString("fr-FR")}`:""}. Les documents opposables publiés au GPU restent la référence.</p>
+            </> : <p>Aucune situation Docurba trouvée pour cette commune.</p>}
+          </section>}
           <div className="basemap-toggle"><strong>Fond de carte</strong><div><button type="button" className={basemap==="plan"?"active":""} onClick={()=>setBasemap("plan")}>Plan</button><button type="button" className={basemap==="aerial"?"active":""} onClick={()=>setBasemap("aerial")}>Vue aérienne</button></div></div>
           <section className="urban-layer-panel" aria-labelledby="urban-layer-title">
             <div className="urban-layer-head"><span><small>Lecture de la carte</small><strong id="urban-layer-title">Informations affichées</strong></span><b>Niveau {mapZoom}</b></div>
@@ -960,7 +983,7 @@ export default function UrbanismePage() {
             {Object.values(publicBuildingCats).some(Boolean) && buildingInfoMode==="risks" && <div className="mos-mini-legend"><strong>Risques des bâtiments publics</strong><span><i style={{background:"#687787"}}/>Aucun risque recensé</span><span><i style={{background:"#e3b341"}}/>1 risque</span><span><i style={{background:"#e1541f"}}/>2-3 risques</span><span><i style={{background:"#c1121f"}}/>4 risques ou plus</span><small>Risques Géorisques interrogés au centre de chaque équipement public sélectionné.</small></div>}
             <p className="public-land-note"><i/>Équipements issus de la Base Permanente des Équipements (INSEE, Île-de-France) pour la commune sélectionnée ; DPE et consommation électrique complétés depuis la BDNB.</p>
           </section>
-          <details className="urban-services"><summary><span><strong>Sources publiques</strong><small>{Object.values(services).filter((state)=>state==="online").length}/8 services disponibles</small></span><b>{Object.values(services).every((state)=>state==="online")?"Connecté":"Vérification"}</b></summary><div className="urban-service-grid">{Object.entries(services).map(([name,state])=><span key={name}><i className={state}/><strong>{name}</strong><small>{state==="online"?"Disponible":state==="error"?"Indisponible":"Connexion…"}</small></span>)}</div></details>
+          <details className="urban-services"><summary><span><strong>Sources publiques</strong><small>{Object.values(services).filter((state)=>state==="online").length}/{serviceCount} services disponibles</small></span><b>{Object.values(services).every((state)=>state==="online")?"Connecté":"Vérification"}</b></summary><div className="urban-service-grid">{Object.entries(services).map(([name,state])=><span key={name}><i className={state}/><strong>{name}</strong><small>{state==="online"?"Disponible":state==="error"?"Indisponible":"Connexion…"}</small></span>)}</div></details>
         </aside>
         <section className="urban-map-wrap">
           {loadingLabels.length>0&&<div className="map-data-loader" role="status" aria-live="polite"><i/><span><strong>Chargement de la carte</strong><small>{loadingLabels.join(" · ")}</small></span></div>}
