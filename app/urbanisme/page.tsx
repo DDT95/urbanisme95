@@ -818,7 +818,7 @@ export default function UrbanismePage() {
     block(108,110,88,38,"Bâtiments","02",[74,85,104],[241,244,249],[["Usage",useLabel],["Construction",String(oldestBuilding||"Non renseignée")],["Hauteur",maxHeight?formatNumber(maxHeight," m"):"Non renseignée"],["Logements",String(dwellingCount||"Non renseigné")],["Détail",buildingCount?"voir annexe":"—"]]);
     block(14,147,88,31,"Propriété foncière","03",[24,117,60],[238,248,241],[["Lecture",ownerCategory],["Référentiel",result.publicLand?"DGFiP FPMU 2025":"Donnée privée non diffusée"]]);
     block(108,153,88,27,"Occupation du sol · MOS","04",[227,179,65],[255,248,231],[["Occupation",result.mos?.mos2025?mosLabels[result.mos.mos2025]||`Poste ${result.mos.mos2025}`:"Non renseignée"],["Évolution",result.mos?.mos2021===result.mos?.mos2025?"Stable depuis 2021":"Changement depuis 2021"]]);
-    block(14,185,88,30,"Règles d’urbanisme","05",[24,117,60],[240,248,243],[["Zonage PLU",zoneLabel],["Servitudes",`${result.servitudes.length} assiette(s)${result.servitudes.length?" · voir annexe":""}`]]);
+    block(14,185,88,30,"Urbanisme et Docurba","05",[24,117,60],[240,248,243],[["Document",`${docurba?.documentOpposable||"Non renseigné"} · ${docurba?.etat||"Situation indisponible"}`],["Parcelle",`${zoneLabel} · ${result.servitudes.length} servitude(s)`]]);
     block(108,185,88,30,"Risques recensés","06",[225,0,15],[255,241,240],[["Synthèse",riskLabel],["Détail",result.risks.length?"voir annexe":"—"]]);
     block(14,218,182,20,"Historique des mutations","07",[0,0,145],[239,242,255],[["Synthèse",`${mutationLabel}${result.mutations.length?" · voir annexe":""}`]]);
 
@@ -855,6 +855,21 @@ export default function UrbanismePage() {
       });
     };
 
+    if(docurba){
+      renderAnnexList("Situation Docurba",[{
+        title:`${docurba.commune} · ${docurba.etat||"Situation communale"}`,
+        lines:[
+          `Document opposable : ${docurba.documentOpposable||"Non renseigné"}`,
+          `Compétence : ${docurba.collectivitePorteuse||docurba.commune}`,
+          `Intercommunalité : ${docurba.epci||"Non renseignée"}`,
+          `Approbation : ${formatDocurbaDate(docurba.dateApprobation)}${docurba.dateExecutoire?` · exécutoire le ${formatDocurbaDate(docurba.dateExecutoire)}`:""}`,
+          docurba.procedureEnCours?`Procédure en cours : ${[docurba.documentEnCours,docurba.procedureEnCours].filter(Boolean).join(" · ")} · prescrite le ${formatDocurbaDate(docurba.datePrescription)}${docurba.dateArret?` · arrêtée le ${formatDocurbaDate(docurba.dateArret)}`:""}`:"Aucune procédure en cours renseignée",
+          ...(docurba.objets?[`Objet : ${docurba.objets}`]:[]),
+          `Source : Docurba${docurbaUpdatedAt?` · extraction du ${new Date(docurbaUpdatedAt).toLocaleDateString("fr-FR")}`:""}`,
+        ],
+        color:[0,0,145],
+      }]);
+    }
     renderAnnexList("Historique des mutations",result.mutations.map((mutation)=>({
       title:`${formatMutationDate(mutation.date_mutation)} · ${mutation.nature_mutation||"Mutation"} · ${formatEuro(mutation.valeur_fonciere)}`,
       lines:[
@@ -905,7 +920,8 @@ export default function UrbanismePage() {
   const maxHeight = Math.max(0, ...(result?.buildings.map((building) => numberValue(building.hauteur_mean)) || []));
   const dwellingCount = result?.buildings.reduce((sum, building) => sum + numberValue(building.nb_log), 0) || 0;
   const dpeClasses = uniqueValues(result?.buildings.map((building) => building.classe_bilan_dpe || (building.classe_conso_energie_arrete_2012 !== "N" ? building.classe_conso_energie_arrete_2012 : null)) || []);
-  const docurba = communeCode ? docurbaCommunes[communeCode] : undefined;
+  const docurbaCode = result?.codeInsee || communeCode;
+  const docurba = docurbaCode ? docurbaCommunes[docurbaCode] : undefined;
   const serviceCount = Object.keys(services).length;
   const stateLandByCommune = useMemo(() => {
     if (!publicDataReady || !publicLandDataRef.current) return [] as {code:string;name:string;count:number}[];
@@ -928,21 +944,6 @@ export default function UrbanismePage() {
           <form className="urban-search" onSubmit={searchAddress}><label htmlFor="urban-address">2 · Cherchez une adresse, une parcelle ou un code INSEE</label><div><input id="urban-address" aria-label="Adresse, référence cadastrale ou code INSEE" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={activeCommune?`Adresse, ou référence cadastrale à ${activeCommune} : AH 0001…`:"Adresse, référence cadastrale ou code INSEE : 95500…"} /><button disabled={loading}>{loading ? "…" : "Rechercher"}</button></div><small className="urban-search-hint">{activeCommune?<>Référence cadastrale à <strong>{activeCommune}</strong> : section + numéro (ex. « AH 0001 »).</>:<>Saisissez un code INSEE seul (ex. « 95500 ») pour cadrer directement une commune, ou choisissez-la ci-dessus puis indiquez la référence cadastrale (ex. « AH 0001 », ou « 95500 AH 0001 » sans commune choisie).</>}</small></form>
           <div className={`urban-message ${loading ? "loading" : ""}`}><i />{message}</div>
           {(result || query) && !loading && <button className="reset-search" type="button" onClick={resetSearch}><span aria-hidden="true">↺</span> Nouvelle recherche</button>}
-          {activeCommune && <section className={`docurba-card ${docurba?.procedureEnCours?"has-procedure":""}`} aria-labelledby="docurba-title">
-            <div className="docurba-card-head"><span><small>Document d’urbanisme</small><strong id="docurba-title">Situation Docurba</strong></span><b>{docurba?.etat||"Donnée indisponible"}</b></div>
-            {docurba ? <>
-              <div className="docurba-primary"><small>Document opposable</small><strong>{docurba.documentOpposable||"Non renseigné"}</strong><span>{docurba.etatDetaille||docurba.etat}</span></div>
-              <dl>
-                <div><dt>Compétence</dt><dd>{docurba.collectivitePorteuse||activeCommune}</dd></div>
-                <div><dt>Intercommunalité</dt><dd>{docurba.epci||"Non renseignée"}</dd></div>
-                <div><dt>Approbation</dt><dd>{formatDocurbaDate(docurba.dateApprobation)}</dd></div>
-                {docurba.dateExecutoire&&<div><dt>Exécutoire</dt><dd>{formatDocurbaDate(docurba.dateExecutoire)}</dd></div>}
-              </dl>
-              {docurba.procedureEnCours&&<div className="docurba-procedure"><small>Procédure en cours</small><strong>{[docurba.documentEnCours,docurba.procedureEnCours].filter(Boolean).join(" · ")}</strong><span>Prescrite le {formatDocurbaDate(docurba.datePrescription)}{docurba.dateArret?` · arrêtée le ${formatDocurbaDate(docurba.dateArret)}`:""}</span>{docurba.objets&&<em>{docurba.objets}</em>}</div>}
-              {(docurba.pluih||docurba.pluiValantScot)&&<div className="docurba-tags">{docurba.pluih&&<span>PLUiH</span>}{docurba.pluiValantScot&&<span>PLUi valant SCoT</span>}</div>}
-              <p>Source : Docurba{docurbaUpdatedAt?` · extraction du ${new Date(docurbaUpdatedAt).toLocaleDateString("fr-FR")}`:""}. Les documents opposables publiés au GPU restent la référence.</p>
-            </> : <p>Aucune situation Docurba trouvée pour cette commune.</p>}
-          </section>}
           <div className="basemap-toggle"><strong>Fond de carte</strong><div><button type="button" className={basemap==="plan"?"active":""} onClick={()=>setBasemap("plan")}>Plan</button><button type="button" className={basemap==="aerial"?"active":""} onClick={()=>setBasemap("aerial")}>Vue aérienne</button></div></div>
           <section className="urban-layer-panel" aria-labelledby="urban-layer-title">
             <div className="urban-layer-head"><span><small>Lecture de la carte</small><strong id="urban-layer-title">Informations affichées</strong></span><b>Niveau {mapZoom}</b></div>
@@ -994,6 +995,21 @@ export default function UrbanismePage() {
       </div>
       <footer className="urban-footer"><span><strong>Cadastre + GPU + BDNB + MOS + DGFiP</strong> · lecture parcellaire du Val-d’Oise</span><span>DDT Val-d’Oise · Leaflet 1.9.4</span></footer>
       {result && detailsOpen && <aside className="observatory-drawer" aria-label="Détail de la parcelle"><div className="observatory-drawer-head"><div className="print-brand"><img src={`${basePath}/prefet-val-doise-logo.png`} alt="Préfet du Val-d’Oise"/><span><b>Fiche d’identité parcellaire</b><small>DDT du Val-d’Oise · {new Date().toLocaleDateString("fr-FR")}</small></span></div><div className="drawer-actions"><button className="print-parcel" onClick={openParcelPdf}>Consulter la fiche PDF</button><button onClick={closeParcelDetails} aria-label="Fermer et désélectionner la parcelle">×</button></div><small>{result.addressLabel} · {result.commune}</small><h2 className="drawer-address">{streetOnly(result.address)}</h2><div className="parcel-id-print">Parcelle {firstValue(parcelProps,["section"],"")} {firstValue(parcelProps,["numero"],"—")}</div></div><div className="observatory-drawer-body urban-results">
+        <section className="drawer-docurba"><div className={`docurba-card ${docurba?.procedureEnCours?"has-procedure":""}`} aria-labelledby="docurba-drawer-title">
+          <div className="docurba-card-head"><span><small>Document d’urbanisme</small><strong id="docurba-drawer-title">Situation Docurba</strong></span><b>{docurba?.etat||"Donnée indisponible"}</b></div>
+          {docurba ? <>
+            <div className="docurba-primary"><small>Document opposable</small><strong>{docurba.documentOpposable||"Non renseigné"}</strong><span>{docurba.etatDetaille||docurba.etat}</span></div>
+            <dl>
+              <div><dt>Compétence</dt><dd>{docurba.collectivitePorteuse||result.commune}</dd></div>
+              <div><dt>Intercommunalité</dt><dd>{docurba.epci||"Non renseignée"}</dd></div>
+              <div><dt>Approbation</dt><dd>{formatDocurbaDate(docurba.dateApprobation)}</dd></div>
+              {docurba.dateExecutoire&&<div><dt>Exécutoire</dt><dd>{formatDocurbaDate(docurba.dateExecutoire)}</dd></div>}
+            </dl>
+            {docurba.procedureEnCours&&<div className="docurba-procedure"><small>Procédure en cours</small><strong>{[docurba.documentEnCours,docurba.procedureEnCours].filter(Boolean).join(" · ")}</strong><span>Prescrite le {formatDocurbaDate(docurba.datePrescription)}{docurba.dateArret?` · arrêtée le ${formatDocurbaDate(docurba.dateArret)}`:""}</span>{docurba.objets&&<em>{docurba.objets}</em>}</div>}
+            {(docurba.pluih||docurba.pluiValantScot)&&<div className="docurba-tags">{docurba.pluih&&<span>PLUiH</span>}{docurba.pluiValantScot&&<span>PLUi valant SCoT</span>}</div>}
+            <p>Source : Docurba{docurbaUpdatedAt?` · extraction du ${new Date(docurbaUpdatedAt).toLocaleDateString("fr-FR")}`:""}. Les documents opposables publiés au GPU restent la référence.</p>
+          </> : <p>Aucune situation Docurba trouvée pour cette commune.</p>}
+        </div></section>
         <section><div className="result-heading"><h2>Parcelle cadastrale</h2></div><dl><div><dt>Référence</dt><dd>{firstValue(parcelProps,["section"],"")} {firstValue(parcelProps,["numero"],"—")}</dd></div><div><dt>Contenance</dt><dd>{firstValue(parcelProps,["contenance"],"—")} m²</dd></div></dl>{result.addressLabel === "Adresse la plus proche" && <p className="address-caution">Adresse BAN la plus proche du point cliqué.</p>}</section>
         <section className="building-summary"><div className="result-heading"><h2>Bâti présent</h2></div>{buildingCount ? <><div className="parcel-kpis"><div><strong>{buildingCount}</strong><span>groupe{buildingCount > 1 ? "s" : ""} de bâtiments</span></div><div><strong>{formatNumber(builtFootprint," m²")}</strong><span>emprise bâtie estimée</span></div><div><strong>{formatNumber(coverageRatio," %")}</strong><span>taux d’emprise</span></div></div><dl><div><dt>Usage principal</dt><dd>{uniqueValues(result.buildings.map((building) => building.usage_principal_bdnb_open)).join(", ") || "Non renseigné"}</dd></div><div><dt>Construction la plus ancienne</dt><dd>{oldestBuilding || "Non renseignée"}</dd></div><div><dt>Hauteur maximale estimée</dt><dd>{maxHeight ? formatNumber(maxHeight," m") : "Non renseignée"}</dd></div><div><dt>Logements recensés</dt><dd>{dwellingCount || "Non renseigné"}</dd></div><div><dt>DPE disponible</dt><dd>{dpeClasses.length ? dpeClasses.join(", ") : "Non disponible"}</dd></div></dl><p className="source-caption">Source : BDNB Open, CSTB. Les groupes de bâtiments peuvent agréger plusieurs constructions.</p></> : <p className="empty-result">Aucun bâtiment rattaché à cette parcelle dans la BDNB Open.</p>}</section>
         <section><div className="result-heading"><h2>Propriété et foncier public</h2></div><div className={`ownership-status ${result.publicLand || publicOwners.length ? "known" : "unknown"}`}><small>{result.publicLand ? "Propriétaire public présumé" : "Catégorie détectée"}</small><strong>{ownerCategory}</strong></div>{!result.publicLand && publicOwners.length ? <div className="owner-list">{publicOwners.map((owner) => <span key={owner}>{owner}</span>)}</div> : !result.publicLand && <p className="empty-result">Le nom des propriétaires privés n’est pas diffusé en open data. L’absence de nom ne signifie pas que la parcelle est sans propriétaire.</p>}<p className="source-caption">Source ouverte : DGFiP, Fichiers des parcelles des personnes morales 2025. Le Référentiel foncier public Cerema avec accès métier reste la référence exhaustive.</p></section>
