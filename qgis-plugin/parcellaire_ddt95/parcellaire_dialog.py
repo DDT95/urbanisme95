@@ -1,14 +1,13 @@
 import os
 
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QFont, QIcon, QPixmap
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -20,6 +19,7 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from . import ui_style
 from .core import generator
 from .core.column_mapping import REFERENTIELS_PAR_MILLESIME
 from .core.csv_import import CsvFormatError
@@ -35,64 +35,20 @@ SCHEMA_DE_TRAVAIL = "q_26_01_4825"
 
 ICON_PATH = os.path.join(os.path.dirname(__file__), "resources", "icon.png")
 
-# Palette sobre inspirée de l'identité de l'État (bleu Marianne / rouge),
-# en accents discrets seulement : aucune fonctionnalité ne doit dépendre
-# du style, qui doit rester lisible si le thème QGIS de l'utilisateur
-# le remplace.
-_STYLE = """
-QGroupBox {
-    font-weight: 600;
-    border: 1px solid #d0d0d0;
-    border-radius: 6px;
-    margin-top: 10px;
-    padding-top: 12px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 4px;
-    color: #000091;
-}
-QPushButton {
-    padding: 5px 14px;
-    border-radius: 4px;
-    border: 1px solid #b0b0b0;
-}
-QPushButton#primary {
-    background-color: #000091;
-    color: white;
-    border: 1px solid #000091;
-    font-weight: 600;
-}
-QPushButton#primary:hover {
-    background-color: #1212b0;
-}
-QPushButton#primary:pressed {
-    background-color: #00006b;
-}
-QTextEdit#report {
-    font-family: Consolas, "Courier New", monospace;
-    font-size: 9.5pt;
-}
-"""
-
 
 class ParcellaireDialog(QDialog):
     def __init__(self, iface, parent=None):
         super().__init__(parent)
         self.iface = iface
-        self.setWindowTitle("État et plan parcellaire — DDT95")
         self.setWindowIcon(QIcon(ICON_PATH))
-        self.resize(720, 620)
-        self.setStyleSheet(_STYLE)
+        self.resize(720, 640)
         self._build_ui()
         self._refresh_connections()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
         layout.setSpacing(12)
-
-        layout.addLayout(self._build_header())
+        layout.setContentsMargins(20, 16, 20, 14)
 
         source_group = QGroupBox("Parcelles à traiter")
         source_form = QFormLayout()
@@ -116,7 +72,7 @@ class ParcellaireDialog(QDialog):
             "• commune + section + numero, en colonnes séparées"
         )
         csv_info.setWordWrap(True)
-        csv_info.setStyleSheet("color: #666; font-style: italic; font-size: 9pt;")
+        csv_info.setObjectName("muted")
         source_vbox.addWidget(csv_info)
         source_group.setLayout(source_vbox)
         layout.addWidget(source_group)
@@ -168,39 +124,9 @@ class ParcellaireDialog(QDialog):
         report_group.setLayout(report_layout)
         layout.addWidget(report_group, stretch=1)
 
-    def _build_header(self):
-        header = QHBoxLayout()
-        header.setSpacing(12)
-
-        logo = QLabel()
-        pixmap = QPixmap(ICON_PATH)
-        if not pixmap.isNull():
-            logo.setPixmap(
-                pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-        header.addWidget(logo)
-
-        titles = QVBoxLayout()
-        titles.setSpacing(0)
-        title = QLabel("État et plan parcellaire")
-        title_font = QFont()
-        title_font.setPointSize(13)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        subtitle = QLabel("DDT95 — Fichiers Fonciers")
-        subtitle.setStyleSheet("color: #666;")
-        titles.addWidget(title)
-        titles.addWidget(subtitle)
-        header.addLayout(titles)
-        header.addStretch(1)
-
-        separator_container = QVBoxLayout()
-        separator_container.addLayout(header)
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        separator_container.addWidget(line)
-        return separator_container
+        ui_style.wrap(
+            self, layout, "État et plan parcellaire", "DDT95 — Fichiers Fonciers"
+        )
 
     def _refresh_connections(self):
         self.connection_combo.clear()
@@ -291,8 +217,8 @@ class ParcellaireDialog(QDialog):
             load_results(conn, params["schema"], params["commande"])
             c = params["commande"]
             self._log(
-                "Couches ajoutées au projet : etat_p_{c}, "
-                "plans_parcellaire_{c}, comparaison_parcelles_{c}.".format(c=c)
+                "Couches ajoutées au projet dans le groupe « état parcelle - {c} » : "
+                "etat_p_{c}, plans_parcellaire_{c}, comparaison_parcelles_{c}.".format(c=c)
             )
         except Exception as exc:
             self._log("Avertissement : couches non ajoutées ({}).".format(exc))

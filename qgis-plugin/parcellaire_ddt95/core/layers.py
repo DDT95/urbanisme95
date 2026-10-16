@@ -1,24 +1,34 @@
-"""Ajout des résultats dans le projet QGIS, nommés d'après la commande.
+"""Ajout des résultats dans le projet QGIS, dans un sous-groupe nommé
+d'après la commande.
 
-Les couches portent le nom réel de la commande (etat_p_<commande>,
-plans_parcellaire_<commande>, comparaison_parcelles_<commande>), pour
-qu'on puisse les distinguer clairement pendant les tests. Les vues
-PostgreSQL à nom fixe (tpl.ETAT_VUE_COURANTE, etc., maintenues par
-generate()) restent disponibles en base pour une future mise en page
-qui aurait besoin d'un nom stable indépendant de la commande.
+Les trois couches (état, plan, comparaison) sont rangées dans un groupe
+"état parcelle - <commande>" du panneau Couches plutôt qu'à la racine.
+Relancer la même commande remplace le groupe existant (couches et
+groupe supprimés puis recréés) plutôt que d'empiler les anciens
+résultats — même logique que les autres plugins DDT95 (ex. « parcelles
+inondées - <scénario> »).
 """
 
 from qgis.core import QgsDataSourceUri, QgsProject, QgsVectorLayer
 
 from . import sql_templates as tpl
 
+GROUP_PREFIX = "état parcelle"
 
-def _replace_layer(project, name, layer):
-    for existing in project.mapLayersByName(name):
-        project.removeMapLayer(existing.id())
-    layer.setName(name)
-    project.addMapLayer(layer)
-    return layer
+
+def _group_name(commande):
+    return "{} - {}".format(GROUP_PREFIX, commande)
+
+
+def _replace_group(project, commande):
+    root = project.layerTreeRoot()
+    gname = _group_name(commande)
+    old = root.findGroup(gname)
+    if old is not None:
+        for layer_node in old.findLayers():
+            project.removeMapLayer(layer_node.layerId())
+        old.parent().removeChildNode(old)
+    return root.insertGroup(0, gname)
 
 
 def _make_layer(base_uri, schema, table, key_column, geometry_column=""):
@@ -28,11 +38,11 @@ def _make_layer(base_uri, schema, table, key_column, geometry_column=""):
 
 
 def load_results(pg_connection, schema, commande, project=None):
-    """Charge (ou recharge) les trois résultats sous des noms reprenant la
-    commande. L'état parcellaire est chargé sans géométrie (table
-    attributaire), le plan comme couche polygonale : aucune manipulation
-    des propriétés de la connexion PostgreSQL n'est nécessaire côté
-    utilisateur."""
+    """Charge (ou recharge) les trois résultats dans un sous-groupe
+    "état parcelle - <commande>". L'état parcellaire est chargé sans
+    géométrie (table attributaire), le plan comme couche polygonale :
+    aucune manipulation des propriétés de la connexion PostgreSQL n'est
+    nécessaire côté utilisateur."""
     project = project or QgsProject.instance()
     base_uri = pg_connection.uri()
 
@@ -41,7 +51,6 @@ def load_results(pg_connection, schema, commande, project=None):
         "plan": tpl.plan_table_name(commande),
         "comparaison": tpl.comparaison_table_name(commande),
     }
-
     layers = {
         "etat": _make_layer(base_uri, schema, names["etat"], "etat_id"),
         "plan": _make_layer(
@@ -49,8 +58,6 @@ def load_results(pg_connection, schema, commande, project=None):
         ),
         "comparaison": _make_layer(base_uri, schema, names["comparaison"], "comparaison_id"),
     }
-
-    loaded = {}
     for key, layer in layers.items():
         if not layer.isValid():
             raise RuntimeError(
@@ -58,5 +65,15 @@ def load_results(pg_connection, schema, commande, project=None):
                     names[key]
                 )
             )
-        loaded[key] = _replace_layer(project, names[key], layer)
-    return loaded
+        layer.setName(names[key])
+
+    group = _replace_group(project, commande)
+    # Inséré en dernier = affiché en premier (insertLayer(0, ...) place
+    # toujours tout en haut) : plan (carte) au-dessus, puis état, puis
+    # comparaison en bas.
+    for key in ("comparaison", "etat", "plan"):
+        layer = layers[key]
+        project.addMapLayer(layer, False)
+        group.insertLayer(0, layer)
+    group.setExpanded(True)
+    return layers
