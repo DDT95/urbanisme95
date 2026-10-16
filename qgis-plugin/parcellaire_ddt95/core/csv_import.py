@@ -32,6 +32,17 @@ REQUIRED_FIELDS = ("commune", "section", "numero")
 OPTIONAL_FIELDS = ("id", "prefixe", "contenance", "created", "updated", "layer")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
+# En-têtes acceptés pour la colonne commune (code INSEE), insensible à la
+# casse/espaces/underscores via _normalize_header().
+_COMMUNE_COLUMN_ALIASES = {"commune", "insee", "codeinsee", "codecommune"}
+
+# En-têtes acceptés pour la colonne section, quand elle est séparée du numéro.
+_SECTION_COLUMN_ALIASES = {"section"}
+
+# En-tête accepté pour la colonne numéro "strict" (chiffres seuls), quand
+# une colonne section séparée existe par ailleurs.
+_NUMERO_STRICT_COLUMN_ALIASES = {"numero"}
+
 # En-têtes acceptés pour une colonne "section"+"numero" fusionnée en une
 # seule colonne, séparés par un espace (ex. en-tête "section numero" sans
 # virgule -> une seule colonne CSV, valeur "A 327").
@@ -62,6 +73,15 @@ _COMBINED_REFERENCE_RE = re.compile(r"^0?([A-Za-z]{1,2})[\s\-/_.]*?(\d+)$")
 # négatifs par le passé) : seul un en-tête explicite 'idpar' est reconnu.
 _IDPAR_COLUMN_ALIASES = {"idpar"}
 
+# Autres colonnes optionnelles : un seul nom d'en-tête accepté chacune,
+# mais toujours comparé via _normalize_header() (insensible à la
+# casse/espaces/underscores).
+_PREFIXE_COLUMN_ALIASES = {"prefixe"}
+_CONTENANCE_COLUMN_ALIASES = {"contenance"}
+_CREATED_COLUMN_ALIASES = {"created"}
+_UPDATED_COLUMN_ALIASES = {"updated"}
+_LAYER_COLUMN_ALIASES = {"layer"}
+
 # commune (5 chiffres) + préfixe (3 chiffres) + section (2 car.) + numéro
 # (4 chiffres) = 14 caractères, format idpar standard Fichiers Fonciers.
 _IDPAR_RE = re.compile(r"^(\d{5})(\d{3})([A-Za-z0-9]{2})(\d{4})$")
@@ -90,6 +110,21 @@ def _normalize_header(name):
     return re.sub(r"[\s_]+", "", name).strip().lower()
 
 
+def _find_column(normalized, aliases):
+    """Renvoie le nom d'en-tête réel (tel qu'écrit dans le CSV) dont la
+    forme normalisée correspond à l'un des alias donnés, ou None."""
+    for alias in aliases:
+        if alias in normalized:
+            return normalized[alias]
+    return None
+
+
+def _get(raw_row, column):
+    if column is None:
+        return ""
+    return (raw_row.get(column) or "").strip()
+
+
 def _split_combined_reference(value):
     """Découpe une référence cadastrale combinée ('A327', 'A 327',
     'AA0028'...) en (section, numero). Renvoie (None, None) si la valeur
@@ -105,9 +140,11 @@ def _split_combined_reference(value):
 
 def read_csv_rows(path, encoding="utf-8-sig"):
     """Lit le CSV et renvoie une liste de dict avec les colonnes ALL_FIELDS.
-    Accepte indifféremment : une colonne 'idpar' complète (14 caractères,
-    prioritaire quand aucune colonne 'section' n'est présente), des
-    colonnes 'section' et 'numero' séparées, une colonne combinée
+    Les en-têtes sont reconnus sans tenir compte de la casse, des espaces
+    ou des underscores (ex. "Commune", "INSEE", "Code_INSEE" sont tous
+    acceptés pour la colonne commune). Accepte indifféremment : une
+    colonne 'idpar' complète (14 caractères, prioritaire quand remplie),
+    des colonnes 'section' et 'numero' séparées, une colonne combinée
     ('section numero' -> 'A 327'), ou une simple colonne 'numero' (ou
     alias : parcelle, numero_parcelle...) contenant la référence complète
     ('A327'). Ignore les lignes incomplètes. Lève CsvFormatError si le
@@ -120,35 +157,35 @@ def read_csv_rows(path, encoding="utf-8-sig"):
             raise CsvFormatError("Le fichier CSV est vide.")
 
         normalized = {_normalize_header(name): name for name in fieldnames}
-        has_section_col = "section" in fieldnames
-        has_numero_col = "numero" in fieldnames
+
+        commune_col = _find_column(normalized, _COMMUNE_COLUMN_ALIASES)
+        section_col = _find_column(normalized, _SECTION_COLUMN_ALIASES)
+        numero_strict_col = _find_column(normalized, _NUMERO_STRICT_COLUMN_ALIASES)
+        prefixe_col = _find_column(normalized, _PREFIXE_COLUMN_ALIASES)
+        contenance_col = _find_column(normalized, _CONTENANCE_COLUMN_ALIASES)
+        created_col = _find_column(normalized, _CREATED_COLUMN_ALIASES)
+        updated_col = _find_column(normalized, _UPDATED_COLUMN_ALIASES)
+        layer_col = _find_column(normalized, _LAYER_COLUMN_ALIASES)
+
+        has_section_col = section_col is not None
+        has_numero_col = numero_strict_col is not None
 
         combined_header = None
         if not (has_section_col and has_numero_col):
-            for alias in _COMBINED_HEADER_ALIASES:
-                if alias in normalized:
-                    combined_header = normalized[alias]
-                    break
+            combined_header = _find_column(normalized, _COMBINED_HEADER_ALIASES)
 
-        idpar_source = None
-        for alias in _IDPAR_COLUMN_ALIASES:
-            if alias in normalized:
-                idpar_source = normalized[alias]
-                break
+        idpar_source = _find_column(normalized, _IDPAR_COLUMN_ALIASES)
 
         combined_numero_source = None
         if not has_section_col and combined_header is None:
-            for alias in _NUMERO_COLUMN_ALIASES:
-                if alias in normalized:
-                    combined_numero_source = normalized[alias]
-                    break
+            combined_numero_source = _find_column(normalized, _NUMERO_COLUMN_ALIASES)
 
         has_commune_route = (
             (has_section_col and has_numero_col)
             or combined_header is not None
             or combined_numero_source is not None
         )
-        if idpar_source is None and "commune" not in fieldnames:
+        if idpar_source is None and commune_col is None:
             raise CsvFormatError("Colonne manquante dans le CSV : commune")
         if idpar_source is None and not has_commune_route:
             raise CsvFormatError(
@@ -162,7 +199,7 @@ def read_csv_rows(path, encoding="utf-8-sig"):
             # 'idpar', quand rempli sur la ligne, est prioritaire (source la
             # plus directe) ; sinon on retombe sur commune/section/numero,
             # que ces colonnes soient présentes en plus ou à la place.
-            raw_idpar = (raw_row.get(idpar_source) or "").strip() if idpar_source else ""
+            raw_idpar = _get(raw_row, idpar_source)
             if raw_idpar:
                 parsed = _parse_idpar(raw_idpar)
                 if parsed is None:
@@ -174,25 +211,25 @@ def read_csv_rows(path, encoding="utf-8-sig"):
                     )
                 commune, prefixe, section, numero = parsed
             elif has_commune_route:
-                commune = (raw_row.get("commune") or "").strip()
-                prefixe = (raw_row.get("prefixe") or "").strip()
+                commune = _get(raw_row, commune_col)
+                prefixe = _get(raw_row, prefixe_col)
 
                 if has_section_col and has_numero_col:
-                    section = (raw_row.get("section") or "").strip()
-                    numero = (raw_row.get("numero") or "").strip()
+                    section = _get(raw_row, section_col)
+                    numero = _get(raw_row, numero_strict_col)
                 elif combined_header is not None:
-                    parts = (raw_row.get(combined_header) or "").split(None, 1)
+                    parts = _get(raw_row, combined_header).split(None, 1)
                     section = parts[0] if parts else ""
                     numero = parts[1].strip() if len(parts) > 1 else ""
                 else:
-                    raw_value = raw_row.get(combined_numero_source) or ""
+                    raw_value = _get(raw_row, combined_numero_source)
                     section, numero = _split_combined_reference(raw_value)
                     if section is None:
                         raise CsvFormatError(
                             "Ligne {} du CSV : numéro de parcelle {!r} "
                             "illisible (format attendu : lettre(s) de "
                             "section suivie(s) du numéro, ex. « A327 » ou "
-                            "« A 327 »).".format(line_no, raw_value.strip())
+                            "« A 327 »).".format(line_no, raw_value)
                         )
 
                 if not (commune and section and numero):
@@ -214,10 +251,10 @@ def read_csv_rows(path, encoding="utf-8-sig"):
                     "prefixe": prefixe,
                     "section": section,
                     "numero": numero,
-                    "contenance": (raw_row.get("contenance") or "").strip(),
-                    "created": (raw_row.get("created") or "").strip(),
-                    "updated": (raw_row.get("updated") or "").strip(),
-                    "layer": (raw_row.get("layer") or "").strip(),
+                    "contenance": _get(raw_row, contenance_col),
+                    "created": _get(raw_row, created_col),
+                    "updated": _get(raw_row, updated_col),
+                    "layer": _get(raw_row, layer_col),
                 }
             )
 

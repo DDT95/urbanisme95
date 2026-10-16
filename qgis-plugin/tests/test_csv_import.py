@@ -147,6 +147,26 @@ class TestReadCsvRows(unittest.TestCase):
             finally:
                 os.remove(path)
 
+    def test_header_matching_is_case_and_separator_insensitive(self):
+        for commune_header, numero_header in (
+            ("Commune", "Numero"),
+            ("INSEE", "Numero"),
+            ("Code_INSEE", "Parcelle"),
+            ("  commune ", "numero_parcelle"),
+        ):
+            path = _write_csv(
+                [{commune_header: "95510", numero_header: "A21"}],
+                [commune_header, numero_header],
+            )
+            try:
+                rows = read_csv_rows(path)
+                self.assertEqual(
+                    len(rows), 1, "en-têtes {!r}/{!r}".format(commune_header, numero_header)
+                )
+                self.assertEqual(rows[0]["id"], "955100000A0021")
+            finally:
+                os.remove(path)
+
     def test_idpar_column_alone(self):
         path = _write_csv(
             [{"idpar": "955100000A0021"}],
