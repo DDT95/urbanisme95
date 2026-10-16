@@ -1,4 +1,9 @@
+import os
+
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
+
+ICON_PATH = os.path.join(os.path.dirname(__file__), "resources", "icon.png")
 
 
 class ParcellairePlugin:
@@ -8,7 +13,9 @@ class ParcellairePlugin:
         self.dialog = None
 
     def initGui(self):
-        self.action = QAction("État et plan parcellaire...", self.iface.mainWindow())
+        self.action = QAction(
+            QIcon(ICON_PATH), "État et plan parcellaire...", self.iface.mainWindow()
+        )
         self.action.triggered.connect(self.run)
         self.iface.addPluginToDatabaseMenu("&Parcellaire DDT95", self.action)
         self.iface.addToolBarIcon(self.action)

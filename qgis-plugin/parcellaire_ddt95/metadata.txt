@@ -13,3 +13,4 @@ tags=cadastre,parcellaire,postgresql,fichiers fonciers,ddt
 experimental=False
 deprecated=False
 hasProcessingProvider=no
+icon=resources/icon.png
