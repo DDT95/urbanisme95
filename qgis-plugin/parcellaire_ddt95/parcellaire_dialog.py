@@ -1,7 +1,7 @@
 import os
 
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtGui import QCursor, QIcon
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QComboBox,
@@ -115,6 +115,11 @@ class ParcellaireDialog(QDialog):
         buttons_row.addWidget(self.diagnose_btn)
         layout.addLayout(buttons_row)
 
+        self.busy_label = QLabel("")
+        self.busy_label.setObjectName("busy")
+        self.busy_label.setVisible(False)
+        layout.addWidget(self.busy_label)
+
         report_group = QGroupBox("Compte rendu")
         report_layout = QVBoxLayout()
         self.report = QTextEdit()
@@ -153,6 +158,18 @@ class ParcellaireDialog(QDialog):
         self.report.append(message)
         QApplication.processEvents()
 
+    def _set_busy(self, busy, message=""):
+        self.generate_btn.setEnabled(not busy)
+        self.verify_btn.setEnabled(not busy)
+        self.diagnose_btn.setEnabled(not busy)
+        self.busy_label.setVisible(busy)
+        if busy:
+            self.busy_label.setText("⏳ " + message)
+            QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+        else:
+            QApplication.restoreOverrideCursor()
+        QApplication.processEvents()
+
     def _current_params(self):
         return dict(
             connection_name=self.connection_combo.currentText().strip(),
@@ -171,13 +188,17 @@ class ParcellaireDialog(QDialog):
             QMessageBox.warning(self, "Paramètre manquant", "Choisissez un fichier CSV.")
             return
 
+        self._set_busy(True, "Vérification des tables existantes…")
         try:
-            existing = generator.existing_result_tables(
-                params["connection_name"], params["schema"], params["commande"]
-            )
-        except (DbError, InvalidIdentifierError) as exc:
-            QMessageBox.critical(self, "Erreur", str(exc))
-            return
+            try:
+                existing = generator.existing_result_tables(
+                    params["connection_name"], params["schema"], params["commande"]
+                )
+            except (DbError, InvalidIdentifierError) as exc:
+                QMessageBox.critical(self, "Erreur", str(exc))
+                return
+        finally:
+            self._set_busy(False)
 
         if existing:
             reply = QMessageBox.question(
@@ -193,35 +214,39 @@ class ParcellaireDialog(QDialog):
                 return
 
         self.report.clear()
+        self._set_busy(True, "Génération en cours, ça peut prendre quelques instants…")
         try:
-            conn, result = generator.generate(
-                params["connection_name"],
-                params["schema"],
-                params["commande"],
-                params["millesime"],
-                params["csv_path"],
-                progress=self._log,
-            )
-        except (CsvFormatError, InvalidIdentifierError, DbError) as exc:
-            self._log("ERREUR : {}".format(exc))
-            QMessageBox.critical(self, "Échec de la génération", str(exc))
-            return
-        except Exception as exc:  # ne jamais planter QGIS silencieusement
-            self._log("ERREUR INATTENDUE : {}".format(exc))
-            QMessageBox.critical(self, "Échec de la génération", str(exc))
-            return
+            try:
+                conn, result = generator.generate(
+                    params["connection_name"],
+                    params["schema"],
+                    params["commande"],
+                    params["millesime"],
+                    params["csv_path"],
+                    progress=self._log,
+                )
+            except (CsvFormatError, InvalidIdentifierError, DbError) as exc:
+                self._log("ERREUR : {}".format(exc))
+                QMessageBox.critical(self, "Échec de la génération", str(exc))
+                return
+            except Exception as exc:  # ne jamais planter QGIS silencieusement
+                self._log("ERREUR INATTENDUE : {}".format(exc))
+                QMessageBox.critical(self, "Échec de la génération", str(exc))
+                return
 
-        self._show_bilan(result)
+            self._show_bilan(result)
 
-        try:
-            load_results(conn, params["schema"], params["commande"])
-            c = params["commande"]
-            self._log(
-                "Couches ajoutées au projet dans le groupe « état parcelle - {c} » : "
-                "etat_p_{c}, plans_parcellaire_{c}, comparaison_parcelles_{c}.".format(c=c)
-            )
-        except Exception as exc:
-            self._log("Avertissement : couches non ajoutées ({}).".format(exc))
+            try:
+                load_results(conn, params["schema"], params["commande"])
+                c = params["commande"]
+                self._log(
+                    "Couches ajoutées au projet dans le groupe « état parcelle - {c} » : "
+                    "etat_p_{c}, plans_parcellaire_{c}, comparaison_parcelles_{c}.".format(c=c)
+                )
+            except Exception as exc:
+                self._log("Avertissement : couches non ajoutées ({}).".format(exc))
+        finally:
+            self._set_busy(False)
 
     def _on_verify(self):
         params = self._current_params()
@@ -230,31 +255,39 @@ class ParcellaireDialog(QDialog):
                 self, "Paramètre manquant", "Renseignez connexion et nom de sortie."
             )
             return
+        self._set_busy(True, "Vérification en cours…")
         try:
-            result = generator.verify(
-                params["connection_name"], params["schema"], params["commande"]
-            )
-        except (DbError, InvalidIdentifierError) as exc:
-            self._log("ERREUR : {}".format(exc))
-            return
-        self._show_bilan(result)
+            try:
+                result = generator.verify(
+                    params["connection_name"], params["schema"], params["commande"]
+                )
+            except (DbError, InvalidIdentifierError) as exc:
+                self._log("ERREUR : {}".format(exc))
+                return
+            self._show_bilan(result)
+        finally:
+            self._set_busy(False)
 
     def _on_diagnose(self):
         params = self._current_params()
         if not params["connection_name"]:
             QMessageBox.warning(self, "Paramètre manquant", "Choisissez une connexion PostgreSQL.")
             return
+        self._set_busy(True, "Diagnostic des tables sources…")
         try:
-            report = diagnose(params["connection_name"], params["millesime"])
-        except (DbError, InvalidIdentifierError) as exc:
-            self._log("ERREUR : {}".format(exc))
-            return
-        for key, table, _actual, missing in report:
-            self._log("--- {} ({}) ---".format(key, table))
-            if missing:
-                self._log("Colonnes attendues absentes : " + ", ".join(missing))
-            else:
-                self._log("Toutes les colonnes attendues sont présentes.")
+            try:
+                report = diagnose(params["connection_name"], params["millesime"])
+            except (DbError, InvalidIdentifierError) as exc:
+                self._log("ERREUR : {}".format(exc))
+                return
+            for key, table, _actual, missing in report:
+                self._log("--- {} ({}) ---".format(key, table))
+                if missing:
+                    self._log("Colonnes attendues absentes : " + ", ".join(missing))
+                else:
+                    self._log("Toutes les colonnes attendues sont présentes.")
+        finally:
+            self._set_busy(False)
 
     def _show_bilan(self, result):
         self._log("")

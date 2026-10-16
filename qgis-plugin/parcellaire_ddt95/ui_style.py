@@ -61,16 +61,17 @@ QTextEdit#report {{
     background: white; border: 1px solid #d3c5d9; border-radius: 8px;
     font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; color: #2a1d30;
 }}
-QFrame#banner {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {c1}, stop:1 {c2}); }}
-QLabel#bTitle {{ color: white; font-size: 18px; font-weight: 800; background: transparent; }}
-QLabel#bBy {{ color: #ffd37a; font-size: 12px; font-weight: 600; background: transparent; letter-spacing: 0.5px; }}
-QLabel#bSub {{ color: #f0dcf5; font-size: 12px; background: transparent; }}
+QFrame#banner {{ background: white; border-bottom: 3px solid {acc}; }}
+QLabel#bTitle {{ color: {c1}; font-size: 18px; font-weight: 800; background: transparent; }}
+QLabel#bBy {{ color: #b8860b; font-size: 12px; font-weight: 700; background: transparent; letter-spacing: 0.5px; }}
+QLabel#bSub {{ color: #7c6b85; font-size: 12px; background: transparent; }}
 QLabel#bVer {{
-    color: white; background: rgba(255,255,255,0.18); border-radius: 9px;
+    color: {acc}; background: #f3e8f6; border-radius: 9px;
     padding: 3px 10px; font-size: 11px; font-weight: 600;
 }}
 QFrame#footer {{ background: #ece3ef; }}
 QFrame#footer QLabel {{ color: #6e5d78; font-size: 11px; background: transparent; }}
+QLabel#busy {{ color: {acc}; font-size: 12px; font-weight: 700; background: transparent; }}
 """.format(acc=ACC, accd=ACCD, c1=C1, c2=C2)
 
 
@@ -84,7 +85,10 @@ def banner(titre, sous_titre=""):
 
     icon_label = QLabel()
     icon_label.setStyleSheet("background: transparent;")
-    icon_label.setPixmap(QIcon(ICON_PATH).pixmap(QSize(52, 52)))
+    icon_pixmap = QIcon(ICON_PATH).pixmap(QSize(160, 160))
+    icon_label.setPixmap(
+        icon_pixmap.scaledToHeight(48, Qt.SmoothTransformation)
+    )
     lay.addWidget(icon_label)
 
     col = QVBoxLayout()
